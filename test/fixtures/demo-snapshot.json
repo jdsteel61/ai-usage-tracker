@@ -1,0 +1,37 @@
+{
+  "codex": {
+    "providerId": "codex",
+    "ok": true,
+    "plan": "pro",
+    "windows": [
+      { "id": "codex:codex:primary", "kind": "session", "label": "5 hr", "usedPercent": 72, "resetsAt": null, "periodSeconds": 18000 },
+      { "id": "codex:codex:secondary", "kind": "weekly", "label": "Week", "usedPercent": 34, "resetsAt": null, "periodSeconds": 604800 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  },
+  "claude": {
+    "providerId": "claude",
+    "ok": true,
+    "plan": "max",
+    "windows": [
+      { "id": "claude:session", "kind": "session", "label": "5 hr", "usedPercent": 91, "resetsAt": null, "periodSeconds": 18000 },
+      { "id": "claude:weekly", "kind": "weekly", "label": "Week", "usedPercent": 58, "resetsAt": null, "periodSeconds": 604800 },
+      { "id": "claude:model:Opus", "kind": "other", "label": "Opus", "usedPercent": 42, "resetsAt": null, "periodSeconds": 604800 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  },
+  "zai": {
+    "providerId": "zai",
+    "ok": true,
+    "plan": "pro",
+    "windows": [
+      { "id": "zai:session", "kind": "session", "label": "5 hr", "usedPercent": 24, "resetsAt": null, "periodSeconds": 18000 },
+      { "id": "zai:weekly", "kind": "weekly", "label": "Week", "usedPercent": 12, "resetsAt": null, "periodSeconds": 604800 },
+      { "id": "zai:webSearches", "kind": "other", "label": "Web searches", "usedPercent": 35, "resetsAt": null, "periodSeconds": 2592000 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  }
+}

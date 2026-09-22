@@ -1,0 +1,24 @@
+{
+  "name": "ai-usage-tracker",
+  "version": "1.4.0",
+  "description": "Quiet Windows tray monitor for Codex, Claude Code, and Z.ai included quota usage",
+  "main": "src/main/main.js",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/",
+    "lint": "eslint src test",
+    "audit": "npm audit --omit=dev || true",
+    "package": "electron-packager . ai-usage-tracker --platform=win32 --arch=x64 --out=dist --overwrite --ignore=\"^/.upstream\" --ignore=\"^/test\" --ignore=\"^/dist\" --ignore=\"^/screenshots\" --ignore=\"^/.git\" --ignore=\"^/node_modules\" --ignore=\"^/eslint.config.js$\"",
+    "screenshot": "electron . --screenshot"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.3.6",
+    "electron": "^39.7.0",
+    "eslint": "^9.30.0"
+  }
+}

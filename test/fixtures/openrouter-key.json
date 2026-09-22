@@ -1,0 +1,9 @@
+{
+  "data": {
+    "label": "ai-usage-tracker",
+    "usage": 2.53,
+    "limit": 10.0,
+    "is_free_tier": false,
+    "rate_limit": { "requests": 20, "interval": "10s" }
+  }
+}

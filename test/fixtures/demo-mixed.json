@@ -1,0 +1,27 @@
+{
+  "codex": {
+    "providerId": "codex",
+    "ok": false,
+    "windows": [],
+    "error": { "code": "NO_CLI", "message": "Codex CLI not found on PATH" },
+    "fetchedAt": 0
+  },
+  "claude": {
+    "providerId": "claude",
+    "ok": true,
+    "plan": "max",
+    "windows": [
+      { "id": "claude:session", "kind": "session", "label": "5 hr", "usedPercent": 4, "resetsAt": "2026-09-21T17:40:00.000Z", "periodSeconds": 18000 },
+      { "id": "claude:weekly", "kind": "weekly", "label": "Week", "usedPercent": 77, "resetsAt": "2026-09-24T15:00:00.000Z", "periodSeconds": 604800 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  },
+  "zai": {
+    "providerId": "zai",
+    "ok": false,
+    "windows": [],
+    "error": { "code": "NO_KEY", "message": "No Z.ai API key stored (add it in Settings)" },
+    "fetchedAt": 0
+  }
+}

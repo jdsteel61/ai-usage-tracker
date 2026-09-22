@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Usage</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+  <header id="app-header">
+    <span id="header-left">
+      <button id="btn-menu" class="icon-btn" title="Menu" aria-label="Menu">&#9776;</button>
+      <span id="header-title">AI USAGE</span>
+    </span>
+    <span id="header-right">
+      <span id="header-clock" title="Last updated">--:--</span>
+      <button id="btn-copy" class="icon-btn" title="Copy usage summary for agents" aria-label="Copy usage summary">&#10697;</button>
+      <button id="btn-refresh" class="icon-btn" title="Refresh now" aria-label="Refresh now">&#8635;</button>
+      <button id="btn-close" class="icon-btn close" title="Hide to tray" aria-label="Hide to tray">&#10005;</button>
+    </span>
+  </header>
+
+  <nav id="main-menu" hidden>
+    <button id="btn-settings" class="menu-item">Settings&hellip;</button>
+    <label class="menu-item check"><input type="checkbox" id="menu-ontop" /> Always on top</label>
+    <label class="menu-item check"><input type="checkbox" id="menu-login" /> Launch at sign-in</label>
+    <button id="menu-copy" class="menu-item">Copy usage summary</button>
+    <button id="menu-refresh" class="menu-item">Refresh now</button>
+    <hr class="menu-sep" />
+    <button id="menu-quit" class="menu-item danger">Quit</button>
+  </nav>
+
+  <main id="cards" aria-live="polite"></main>
+
+  <section id="settings-panel" hidden>
+    <div class="settings-scroll">
+      <div class="settings-head">
+        <h2>Settings</h2>
+        <button id="btn-settings-close" class="small-btn">Done</button>
+      </div>
+
+      <h3>Providers</h3>
+      <div class="check-grid three">
+        <label class="row"><input type="checkbox" id="set-prov-codex" /> Codex</label>
+        <label class="row"><input type="checkbox" id="set-prov-claude" /> Claude</label>
+        <label class="row"><input type="checkbox" id="set-prov-zai" /> Z.ai</label>
+        <label class="row"><input type="checkbox" id="set-prov-grok" /> Grok</label>
+        <label class="row"><input type="checkbox" id="set-prov-gemini" /> Gemini</label>
+        <label class="row"><input type="checkbox" id="set-prov-openrouter" /> OpenRouter</label>
+      </div>
+
+      <h3>Refresh &amp; display</h3>
+      <label class="row">Interval (min, min 1)
+        <input type="number" id="set-interval" min="1" max="1440" step="1" /></label>
+      <label class="row">Percentage shows
+        <select id="set-percentmode">
+          <option value="used">Used</option>
+          <option value="remaining">Remaining</option>
+        </select></label>
+      <label class="row">Reset times
+        <select id="set-clock">
+          <option value="24">24-hour</option>
+          <option value="12">12-hour</option>
+        </select></label>
+      <label class="row">Theme
+        <select id="set-theme">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select></label>
+      <div class="check-grid">
+        <label class="row"><input type="checkbox" id="set-ontop" /> Always on top</label>
+        <label class="row"><input type="checkbox" id="set-login" /> Launch at sign-in</label>
+      </div>
+
+      <h3>Spike alerts</h3>
+      <label class="row">Absolute jump (points/interval)
+        <input type="number" id="set-spike-abs" min="1" max="100" step="1" /></label>
+      <label class="row">Relative minimum (points)
+        <input type="number" id="set-spike-rel-min" min="1" max="100" step="1" /></label>
+      <label class="row">Rate vs 24h median (x)
+        <input type="number" id="set-spike-rel-mult" min="1" max="100" step="0.5" /></label>
+      <label class="row">Alert duration (min)
+        <input type="number" id="set-spike-minutes" min="1" max="1440" step="1" /></label>
+
+      <h3>API keys</h3>
+      <p class="hint">Keys are stored only in Windows Credential Manager; key actions confirm first and never log the key. Cards scale to fit the window (drag its edge to resize).</p>
+      <div id="api-keys"></div>
+    </div>
+  </section>
+
+  <div id="toast" aria-live="polite"></div>
+
+  </div><!-- /app -->
+  <script src="scale.js"></script>
+  <script src="summary.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

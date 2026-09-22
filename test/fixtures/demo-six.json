@@ -1,0 +1,60 @@
+{
+  "codex": {
+    "providerId": "codex",
+    "ok": true,
+    "plan": "plus",
+    "windows": [
+      { "id": "codex:weekly", "kind": "weekly", "label": "Week", "usedPercent": 34, "resetsAt": "2026-09-24T15:00:00.000Z", "periodSeconds": 604800 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  },
+  "claude": {
+    "providerId": "claude",
+    "ok": true,
+    "plan": "max",
+    "windows": [
+      { "id": "claude:session", "kind": "session", "label": "5 hr", "usedPercent": 6, "resetsAt": "2026-09-21T17:40:00.000Z", "periodSeconds": 18000 },
+      { "id": "claude:weekly", "kind": "weekly", "label": "Week", "usedPercent": 78, "resetsAt": "2026-09-24T15:00:00.000Z", "periodSeconds": 604800 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  },
+  "zai": {
+    "providerId": "zai",
+    "ok": true,
+    "plan": "max",
+    "windows": [
+      { "id": "zai:session", "kind": "session", "label": "5 hr", "usedPercent": 22, "resetsAt": "2026-09-21T17:40:00.000Z", "periodSeconds": 18000 },
+      { "id": "zai:weekly", "kind": "weekly", "label": "Week", "usedPercent": 41, "resetsAt": "2026-09-25T15:00:00.000Z", "periodSeconds": 604800 }
+    ],
+    "notes": [],
+    "fetchedAt": 0
+  },
+  "grok": {
+    "providerId": "grok",
+    "ok": true,
+    "windows": [
+      { "id": "grok:credits", "kind": "weekly", "label": "Credits", "usedPercent": 17, "resetsAt": null, "periodSeconds": null }
+    ],
+    "notes": ["Credit balance (does not reset)"],
+    "fetchedAt": 0
+  },
+  "gemini": {
+    "providerId": "gemini",
+    "ok": true,
+    "plan": "AI Studio",
+    "windows": [],
+    "notes": ["Key valid - Google exposes no usage/quota API", "Free tier: 15 RPM / 1,500 RPD (docs)"],
+    "fetchedAt": 0
+  },
+  "openrouter": {
+    "providerId": "openrouter",
+    "ok": true,
+    "windows": [
+      { "id": "openrouter:budget", "kind": "weekly", "label": "Credits", "usedPercent": 63, "resetsAt": null, "periodSeconds": null }
+    ],
+    "notes": ["Rate limit: 20 req/10s"],
+    "fetchedAt": 0
+  }
+}

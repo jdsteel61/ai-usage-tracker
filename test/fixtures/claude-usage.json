@@ -1,0 +1,18 @@
+{
+  "five_hour": {
+    "utilization": 91,
+    "resets_at": "2026-09-21T18:30:00.000Z"
+  },
+  "seven_day": {
+    "utilization": 58,
+    "resets_at": "2026-09-25T00:00:00.000Z"
+  },
+  "limits": [
+    {
+      "kind": "weekly_scoped",
+      "scope": { "model": { "id": "model-opus-4", "display_name": "Opus" } },
+      "percent": 42,
+      "resets_at": "2026-09-25T00:00:00.000Z"
+    }
+  ]
+}

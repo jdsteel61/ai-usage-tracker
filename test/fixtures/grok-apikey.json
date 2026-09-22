@@ -1,0 +1,7 @@
+{
+  "data": {
+    "api_key": { "id": "k_1234", "name": "dev" },
+    "usage": { "total_credits_used": 4.2 },
+    "credit_limit": 25.0
+  }
+}
