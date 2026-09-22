@@ -29,6 +29,7 @@ module.exports = [
         document: 'readonly',
         window: 'readonly',
         requestAnimationFrame: 'readonly',
+        getComputedStyle: 'readonly',
         Intl: 'readonly',
         Date: 'readonly',
         Promise: 'readonly',

@@ -82,6 +82,53 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
   }
 
+  // ---- custom tooltip (native titles can't be positioned or styled) ----
+
+  const tipEl = document.getElementById('tooltip');
+
+  function hideTip() {
+    tipEl.classList.remove('show');
+    tipEl.textContent = '';
+  }
+
+  /** Place the tooltip to the RIGHT of `target` (shrinking to fit), clamped. */
+  function placeTip(target) {
+    const zoom = parseFloat(getComputedStyle(app).zoom) || 1;
+    const r = target.getBoundingClientRect();
+    const availW = window.innerWidth / zoom;
+    const availH = window.innerHeight / zoom;
+    const left0 = r.right / zoom;
+    const roomRight = availW - left0 - 8;
+    let left;
+    if (roomRight >= 110) {
+      // Enough room right of the anchor: shrink to fit and open rightward.
+      tipEl.style.maxWidth = `${Math.min(280, roomRight)}px`;
+      left = left0 + 6;
+    } else {
+      // Not enough room: full-width tooltip clamped to the window.
+      tipEl.style.maxWidth = `${Math.min(280, availW - 8)}px`;
+      left = Math.max(4, availW - tipEl.offsetWidth - 4);
+    }
+    let top = r.top / zoom - 2;
+    const maxTop = availH - tipEl.offsetHeight - 4;
+    if (top > maxTop) top = Math.max(4, r.top / zoom - tipEl.offsetHeight - 4);
+    tipEl.style.left = `${left}px`;
+    tipEl.style.top = `${top}px`;
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    const target = e.target.closest && e.target.closest('[data-tip]');
+    if (!target) { hideTip(); return; }
+    const text = target.getAttribute('data-tip');
+    if (!text) { hideTip(); return; }
+    tipEl.textContent = text;
+    tipEl.classList.add('show');
+    placeTip(target);
+  });
+  document.addEventListener('mouseout', (e) => {
+    if (e.target.closest && e.target.closest('[data-tip]')) hideTip();
+  });
+
   function renderClock() {
     const hour24 = !settings || settings.clock24 !== false;
     const fmt = new Intl.DateTimeFormat('en-US', hour24
@@ -129,17 +176,28 @@
     }
     if (p.peak) {
       const hour24 = !settings || settings.clock24 !== false;
-      const fmt = new Intl.DateTimeFormat('en-US', hour24
+      const timeOpt = hour24
         ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
-        : { hour: '2-digit', minute: '2-digit', hour12: true });
+        : { hour: '2-digit', minute: '2-digit', hour12: true };
+      const fmtDayTime = (ms) => new Intl.DateTimeFormat('en-US', { weekday: 'short', ...timeOpt }).format(new Date(ms));
       const badge = document.createElement('span');
       const on = p.peak.mode === 'peak';
       badge.className = `peak-badge ${on ? 'on' : 'off'}`;
       badge.textContent = on ? 'PEAK' : 'OFF-PEAK';
-      let when = '';
-      if (on && p.peak.endsAt) when = ` \u00b7 ends ${fmt.format(new Date(p.peak.endsAt))}`;
-      else if (!on && p.peak.nextStartAt) when = ` \u00b7 starts ${fmt.format(new Date(p.peak.nextStartAt))}`;
-      badge.title = p.peak.description + when;
+      // Rich tooltip: meaning + Beijing rule + the same window in the user's
+      // own timezone (representative current/next window, DST-aware via Intl).
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
+      const lines = [
+        on ? 'PEAK: full credit cost per call' : 'OFF-PEAK: calls cost 50% of the base credit',
+        'Z.ai peak window: Mon-Fri 14:00-18:00 Beijing (UTC+8)',
+      ];
+      const repStart = on ? Date.parse(p.peak.endsAt) - 4 * 3600_000 : Date.parse(p.peak.nextStartAt);
+      if (Number.isFinite(repStart)) {
+        lines.push(`= ${fmtDayTime(repStart)} - ${fmtDayTime(repStart + 4 * 3600_000)} ${tz}`);
+      }
+      if (on && p.peak.endsAt) lines.push(`Peak ends ${fmtDayTime(Date.parse(p.peak.endsAt))} ${tz}`);
+      else if (p.peak.nextStartAt) lines.push(`Peak starts ${fmtDayTime(Date.parse(p.peak.nextStartAt))} ${tz}`);
+      badge.setAttribute('data-tip', lines.join('\n'));
       head.appendChild(badge);
     }
     const spacer = document.createElement('span');
@@ -149,8 +207,14 @@
       const spike = document.createElement('button');
       spike.className = 'spike';
       spike.textContent = '!';
-      spike.title = p.spike.description;
-      spike.addEventListener('click', () => { spike.title && window.alert(spike.title); });
+      spike.setAttribute('data-tip', [
+        'Usage spike alert',
+        'Raised when a quota jumps sharply within one polling interval -',
+        'often a runaway agent loop burning through the plan.',
+        '',
+        `Event: ${p.spike.description}`,
+      ].join('\n'));
+      spike.addEventListener('click', () => showToast(p.spike.description));
       head.appendChild(spike);
     }
     if (p.stale && p.ok) {
@@ -280,6 +344,7 @@
   function render(snap) {
     snapshot = snap;
     lastUpdated = snap ? snap.lastUpdated : lastUpdated;
+    hideTip(); // hovered elements are rebuilt below; avoid a stale tooltip
     cards.textContent = '';
     if (!snap) return;
     let rendered = 0;

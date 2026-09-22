@@ -309,3 +309,21 @@ main used to build the review diff). 119/119 tests (7 new: boundaries,
 weekends, Friday->Monday next-start, snapshot passthrough, summary
 suffix), lint clean, E2E PASS (peakBadge:true), screenshots regenerated,
 live instance swapped to v1.5.0.
+
+## v1.5.1 - rich rightward tooltips for peak + spike
+
+Native title tooltips position themselves (usually left of the cursor) and
+cannot be styled or multi-lined, so the peak badge and spike '!' now use a
+custom #tooltip element: dark pill, pre-line text, opens to the RIGHT of
+the anchor by shrinking to the available space (>=110px; falls back to
+window-clamped placement in narrow windows), zoom-aware coordinate math
+(getBoundingClientRect is visual px; #app layout px = visual / zoom), and
+hidden on re-render so a rebuilt card never leaves a stale tooltip. Peak
+tooltip content: what the mode means (full vs 50% credit cost), the
+published Beijing rule, the same window converted to the USER'S timezone
+(representative current/next window formatted via Intl with weekday,
+DST-aware, tz name shown), and when the mode flips. Spike tooltip: what a
+spike alert is + the specific event. Also fixed along the way: the v1.4.0
+spike toast change had been silently dropped by a failed multi-edit batch
+(window.alert was still live). E2E selftest now asserts tooltipShown /
+tooltipRight / tooltipTz. 119/119 tests, lint clean, instance swapped.

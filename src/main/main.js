@@ -560,6 +560,21 @@ async function runSettingsSelftest() {
         appZoom: document.getElementById('app').style.zoom || 'unset',
         fitDetail: document.getElementById('app').dataset.fit || 'none',
         peakBadge: !!document.querySelector('.peak-badge'),
+        // Custom tooltip: hovering the peak badge must show it to the RIGHT
+        // of the badge (dispatch synthetic mouseover, compare visual rects).
+        ...(() => {
+          const badge = document.querySelector('.peak-badge');
+          if (!badge) return { tooltipShown: false, tooltipRight: false, tooltipTz: false };
+          badge.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          const tip = document.getElementById('tooltip');
+          const br = badge.getBoundingClientRect();
+          const tr = tip.getBoundingClientRect();
+          return {
+            tooltipShown: tip.classList.contains('show') && tip.textContent.includes('Beijing'),
+            tooltipRight: tr.left >= br.left - 1,
+            tooltipTz: (() => { const l3 = tip.textContent.split('\\n')[2] || ''; return l3.includes('/') || l3.includes('local time'); })(),
+          };
+        })(),
         copyOk,
         copyRestored,
         copyTwiceOk,

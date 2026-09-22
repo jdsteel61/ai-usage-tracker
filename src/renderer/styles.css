@@ -115,6 +115,28 @@ html, body {
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* ---------------- custom tooltip (opens rightward) ---------------- */
+
+#tooltip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 70;
+  background: #111827ee;
+  color: #f9fafb;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 1.45;
+  max-width: 260px;
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+#tooltip.show { opacity: 1; }
+
 .empty-hint {
   color: var(--muted);
   padding: 14px 10px;
