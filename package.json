@@ -1,6 +1,6 @@
 {
   "name": "ai-usage-tracker",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Quiet Windows tray monitor for Codex, Claude Code, and Z.ai included quota usage",
   "main": "src/main/main.js",
   "private": true,

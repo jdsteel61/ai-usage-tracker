@@ -127,6 +127,21 @@
       plan.textContent = p.plan;
       head.appendChild(plan);
     }
+    if (p.peak) {
+      const hour24 = !settings || settings.clock24 !== false;
+      const fmt = new Intl.DateTimeFormat('en-US', hour24
+        ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+        : { hour: '2-digit', minute: '2-digit', hour12: true });
+      const badge = document.createElement('span');
+      const on = p.peak.mode === 'peak';
+      badge.className = `peak-badge ${on ? 'on' : 'off'}`;
+      badge.textContent = on ? 'PEAK' : 'OFF-PEAK';
+      let when = '';
+      if (on && p.peak.endsAt) when = ` \u00b7 ends ${fmt.format(new Date(p.peak.endsAt))}`;
+      else if (!on && p.peak.nextStartAt) when = ` \u00b7 starts ${fmt.format(new Date(p.peak.nextStartAt))}`;
+      badge.title = p.peak.description + when;
+      head.appendChild(badge);
+    }
     const spacer = document.createElement('span');
     spacer.className = 'spacer';
     head.appendChild(spacer);

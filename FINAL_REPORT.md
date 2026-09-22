@@ -289,3 +289,23 @@ clients and synthetic fixtures:
    stores a key (with confirmation) in the running app.
 5. The `!` spike badge was tested with deterministic fixtures; live-provider
    timing behavior may reveal tuning opportunities for the defaults.
+
+## v1.5.0 - peak/off-peak indicator
+
+Research first: live-probed the Claude OAuth usage and Z.ai quota payloads
+(sanitized; no tokens printed). Claude exposes no peak fields - skipped
+honestly. Z.ai's API exposes none either, but Zhipu/BigModel publish the
+schedule: peak Mon-Fri 14:00-18:00 Beijing (UTC+8), off-peak calls cost
+50% of base credit. New src/main/peak.js (adapted from agent-usage-widget
+src/peak.js, MIT - credited in THIRD_PARTY_NOTICES.md) computes the state
+against the Beijing clock (pure epoch math, timezone-independent, no tz
+db). snapshotView attaches `peak` via a PEAK_STATES registry (extending to
+another provider is one entry); UI shows an amber PEAK / teal OFF-PEAK
+badge on the Z.ai card with tooltip incl. when it flips; the copy-for-
+agents summary appends [peak] / [off-peak: 50% credit]. Also: Codex CLI
+(gpt-6-astra) reviewed upstream PR lamchun1110/UsageDeck#38 - LGTM on the
+true diff (an initial 'scope' finding was an artifact of a stale local
+main used to build the review diff). 119/119 tests (7 new: boundaries,
+weekends, Friday->Monday next-start, snapshot passthrough, summary
+suffix), lint clean, E2E PASS (peakBadge:true), screenshots regenerated,
+live instance swapped to v1.5.0.

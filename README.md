@@ -74,10 +74,18 @@ Always-on-top, Launch-at-login, Settings, and Quit.
 visible. Enabling more providers squeezes them into the window; dragging
 the window larger scales everything up (0.5x - 1.8x).
 
-**Copy for agents:** the `⭘`-style header button (between the clock and
+**Copy for agents:** the header button (between the clock and
 refresh) copies a compact plain-text usage summary to the clipboard -
-per-provider windows, percentages, and reset times - ready to paste into
-an agent prompt for routing decisions.
+per-provider windows, percentages, reset times, and peak/off-peak state
+where a provider has one - ready to paste into an agent prompt for routing
+decisions.
+
+**Peak/off-peak:** providers with a published peak schedule show a badge
+on their card. Currently Z.ai (GLM Coding Plan): peak hours are Mon-Fri
+14:00-18:00 Beijing time (UTC+8) and off-peak calls cost 50% of the base
+credit cost; the badge shows which mode is active and when it flips. The
+Claude usage API does not expose peak state, so no badge is shown there
+rather than guessing.
 
 ## What each provider needs
 

@@ -7,9 +7,14 @@
  */
 const { providerHasSpike, describeAlert } = require('./spikes');
 const { formatAge } = require('./format');
+const { getZaiPeakState } = require('./peak');
 
 const TITLES = { codex: 'Codex', claude: 'Claude', zai: 'Z.ai', grok: 'Grok', gemini: 'Gemini', openrouter: 'OpenRouter' };
 const ORDER = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter'];
+
+/** Providers with a known published peak/off-peak schedule. Extending
+ *  peak support to another provider is one entry here + an adapter. */
+const PEAK_STATES = { zai: getZaiPeakState };
 
 function describeActiveAlert(activeAlerts, providerId) {
   for (const [key, v] of Object.entries(activeAlerts || {})) {
@@ -24,11 +29,14 @@ function describeActiveAlert(activeAlerts, providerId) {
  * and cached-ok-but-stale. Must never throw.
  */
 function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
+  // Peak/off-peak comes from published schedules, not the fetch, so it is
+  // attached in every provider state (fresh boot, error, disabled).
+  const peak = PEAK_STATES[id] ? PEAK_STATES[id](now) : null;
   if (!snap) {
     return {
       id, title: TITLES[id], enabled: !!enabled, ok: false,
       error: { code: 'DISABLED', message: 'Provider disabled in Settings' },
-      windows: { session: null, weekly: null }, extras: [], notes: [], spike: null,
+      windows: { session: null, weekly: null }, extras: [], notes: [], spike: null, peak,
     };
   }
   const windows = Array.isArray(snap.windows) ? snap.windows : [];
@@ -57,6 +65,7 @@ function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
     notes: Array.isArray(snap.notes) ? snap.notes : [],
     windows: byKind,
     extras: windows.filter((x) => x && x.kind === 'other'),
+    peak,
     spike: providerHasSpike(activeAlerts, id, now)
       ? { description: describeActiveAlert(activeAlerts, id) }
       : null,

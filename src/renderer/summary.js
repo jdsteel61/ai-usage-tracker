@@ -57,6 +57,7 @@
       if (!parts.length) parts.push('no quota windows reported');
     }
     let s = `${name}: ${parts.join('; ')}`;
+    if (p.peak) s += p.peak.mode === 'peak' ? ' [peak]' : ' [off-peak: 50% credit]';
     if (p.stale) s += ' [stale]';
     return s;
   }

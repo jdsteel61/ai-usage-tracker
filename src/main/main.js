@@ -559,6 +559,7 @@ async function runSettingsSelftest() {
         cardCount: document.getElementById('cards').children.length,
         appZoom: document.getElementById('app').style.zoom || 'unset',
         fitDetail: document.getElementById('app').dataset.fit || 'none',
+        peakBadge: !!document.querySelector('.peak-badge'),
         copyOk,
         copyRestored,
         copyTwiceOk,
@@ -571,7 +572,7 @@ async function runSettingsSelftest() {
     log.info('selftest', JSON.stringify(result));
     const ok = result.waited && result.menuOpened && result.opened && result.closedAfterDone
       && result.displayAfterDone === 'none' && result.copyOk && result.copyRestored
-      && result.copyTwiceOk && result.menuCopyOk && result.toastPresent;
+      && result.copyTwiceOk && result.menuCopyOk && result.toastPresent && result.peakBadge;
     log.info('selftest', ok ? 'PASS' : 'FAIL');
     app.exit(ok ? 0 : 1);
   } catch (cause) {

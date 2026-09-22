@@ -8,18 +8,23 @@ file credits the origin.
 
 ## Adapted mechanisms
 
-- **agent-usage-widget** (MIT, (c) chunnytechmate): the Codex CLI
+- **agent-usage-widget** (MIT, declared in its package.json, (c) chunnytechmate,
+  https://github.com/chunnytechmate/agent-usage-widget): the Codex CLI
   `app-server` JSON-RPC handshake used in `src/main/providers/codex.js`
   (initialize -> initialized -> `account/rateLimits/read`) was adapted from
   its `src/gpt.js`. The idea of reading the Claude OAuth usage endpoint by
   reusing the Claude Code login (its `src/usage.js`) informed
-  `src/main/providers/claude.js`.
-- **UsageDeck** (MIT, (c) lamchun1110, deviffyy): the Z.ai Coding Plan quota
+  `src/main/providers/claude.js`. The Z.ai peak-hours schedule and
+  Beijing-clock arithmetic in `src/main/peak.js` were adapted from its
+  `src/peak.js` (schedule as published by Zhipu / BigModel).
+- **UsageDeck** (MIT, (c) lamchun1110, deviffyy,
+  https://github.com/lamchun1110/UsageDeck): the Z.ai Coding Plan quota
   schema classification (unit codes 3/4/5/6, session < 24h, web-search
   `TIME_LIMIT` entries) in `src/main/providers/zai.js` follows the mapping
   documented in its `src-tauri/src/providers/zai/mapper.rs`, and its
   normalized `QuotaWindow` model shaped our provider interface.
-- **codex-usage-monitor** (MIT, (c) upstream-ray): consulted as a native
+- **codex-usage-monitor** (MIT, (c) Craig Constable,
+  https://github.com/upstream-ray/codex-usage-monitor): consulted as a native
   Windows/Rust reference for Codex/Claude quota collection and tray
   behavior. No code was reused.
 
