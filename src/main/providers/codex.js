@@ -157,8 +157,10 @@ function resolveCodexTarget(env = process.env, deps = {}) {
  * Transport: spawn `codex app-server`, run the handshake, normalize.
  * `deps` is injectable for tests: { spawnImpl, target }.
  */
-async function fetchCodexQuotas({ spawnImpl = spawn, target } = {}) {
-  const resolved = target || resolveCodexTarget();
+async function fetchCodexQuotas({ spawnImpl = spawn, target, codexHome, signal } = {}) {
+  if (signal && signal.aborted) return errorSnapshot('codex', 'ABORTED', 'Codex poll aborted');
+  const env = codexHome ? { ...process.env, CODEX_HOME: codexHome } : process.env;
+  const resolved = target || resolveCodexTarget(env);
   if (!resolved) return errorSnapshot('codex', 'NO_CLI', 'Codex CLI not found on PATH');
 
   return new Promise((resolve) => {
@@ -167,6 +169,7 @@ async function fetchCodexQuotas({ spawnImpl = spawn, target } = {}) {
       child = spawnImpl(resolved.exe, [...resolved.args, 'app-server'], {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
+        env,
       });
     } catch (cause) {
       resolve(errorSnapshot('codex', 'NO_CLI', `Could not start Codex CLI: ${cause.message}`));
@@ -182,9 +185,26 @@ async function fetchCodexQuotas({ spawnImpl = spawn, target } = {}) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', abort);
+      lines.removeAllListeners('line');
+      child.stderr.removeListener('data', onStderr);
+      child.removeListener('exit', onExit);
       lines.close();
-      try { child.kill(); } catch { /* already gone */ }
-      resolve(snap);
+      if (child.exitCode !== null && child.exitCode !== undefined) { resolve(snap); return; }
+      let killTimer = null;
+      const terminated = () => {
+        clearTimeout(killTimer);
+        child.removeListener('exit', terminated);
+        child.removeListener('close', terminated);
+        resolve(snap);
+      };
+      child.once('exit', terminated);
+      child.once('close', terminated);
+      killTimer = setTimeout(() => {
+        snap.retrySafe = false;
+        terminated();
+      }, 200);
+      try { child.kill(); } catch { /* bounded cleanup wait below */ }
     };
 
     const send = (msg) => {
@@ -192,6 +212,7 @@ async function fetchCodexQuotas({ spawnImpl = spawn, target } = {}) {
     };
 
     const fail = (code, message) => finish(errorSnapshot('codex', code, message));
+    const abort = () => fail('ABORTED', 'Codex poll aborted');
 
     timer = setTimeout(() => fail('TIMEOUT', 'Codex app-server timed out'), REQUEST_TIMEOUT_MS);
 
@@ -199,16 +220,18 @@ async function fetchCodexQuotas({ spawnImpl = spawn, target } = {}) {
       fail('NO_CLI', cause.code === 'ENOENT' ? 'Codex CLI not found' : `Could not start Codex CLI: ${cause.message}`);
     });
 
-    child.stderr.on('data', (chunk) => {
+    const onStderr = (chunk) => {
       // Small diagnostic tail only; never forwarded on success.
       stderrTail = (stderrTail + chunk.toString()).slice(-300);
-    });
+    };
+    child.stderr.on('data', onStderr);
 
-    child.on('exit', (code) => {
+    const onExit = (code) => {
       if (settled) return;
       const detail = stderrTail.trim().split(/\r?\n/).pop();
       fail('EXIT', detail || `Codex app-server exited with code ${code}`);
-    });
+    };
+    child.on('exit', onExit);
 
     lines.on('line', (line) => {
       let message;
@@ -234,6 +257,10 @@ async function fetchCodexQuotas({ spawnImpl = spawn, target } = {}) {
       }
     });
 
+    if (signal) {
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) { abort(); return; }
+    }
     send({
       method: 'initialize',
       id: 0,

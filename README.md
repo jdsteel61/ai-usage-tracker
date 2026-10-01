@@ -80,6 +80,14 @@ per-provider windows, percentages, reset times, and peak/off-peak state
 where a provider has one - ready to paste into an agent prompt for routing
 decisions.
 
+Successful readings for every provider and profile are saved locally and restored
+as stale after restarting. Copied summaries include reading age, local Claude
+capture, paused accounts, and rate-limit retry times. The selected Claude account's
+capture file is watched, so normal Claude Code usage updates its card within about
+a second without refreshing other providers. Account switching reads only local data.
+Provider endpoint settings stay isolated; poll timeouts cancel the underlying
+HTTP request or CLI process before retrying.
+
 **Peak/off-peak:** providers with a published peak schedule show a badge
 on their card. Currently Z.ai (GLM Coding Plan): peak hours are Mon-Fri
 14:00-18:00 Beijing time (UTC+8) and off-peak calls cost 50% of the base
@@ -92,7 +100,7 @@ rather than guessing.
 Included-quota agents (auto-discovered, no key needed):
 
 - **Codex** (OpenAI) - weekly usage via the Codex CLI app-server
-- **Claude** (Anthropic) - 5-hour + weekly limits from the local OAuth token
+- **Claude** (Anthropic) - 5-hour + weekly limits captured from Claude Code's status line
 - **Z.ai** (GLM Coding Plan) - session + weekly quota from a key you store
   (key lives only in Windows Credential Manager)
 
@@ -112,8 +120,12 @@ All monitoring is metadata-only; the app never sends inference requests.
 | Provider | Requirement | How it is read |
 |---|---|---|
 | Codex | Codex CLI installed and signed in (`codex` on PATH) | Spawns `codex app-server` and calls the metadata-only `account/rateLimits/read` method. The CLI handles its own credentials; we never read or write the Codex auth file. |
-| Claude | Claude Code signed in on this machine | Reads the OAuth token from `~/.claude/.credentials.json` (read-only) and calls the account usage endpoint `GET api.anthropic.com/api/oauth/usage`. No `claude -p` prompt, no Messages API call - monitoring never consumes model usage. |
+| Claude | Claude Code v2.1.251+ and Node.js on PATH | Reads a local cache written from Claude Code's documented status-line JSON. No credential reads, usage-endpoint requests, or model calls. Enable local capture in Settings for each profile. |
 | Z.ai | GLM Coding Plan API key | You add the key in Settings; it is stored in **Windows Credential Manager** only. Polled via `GET https://api.z.ai/api/monitor/usage/quota/limit` (base URL configurable). |
+
+Additional **Codex CLI** or **Claude Code** accounts can be added in **Settings → [provider] profiles → Add profile…**. Select a signed-in Codex home folder or Claude Code config folder (such as `.claude-work`). Each profile gets its own card and history. The normal provider checkbox controls all profiles of that provider. The front-page **Watching** selector chooses which Claude account's local usage is displayed actively; other cards retain their last reading and its age. Folder paths are stored in local settings; Codex authentication stays managed by the Codex CLI.
+
+For Claude, click **Enable local capture** (or **Enable capture** for an additional profile). The installer wraps the current status-line command and preserves its output and options. The previous status-line setting is saved in `<config folder>/ai-usage-tracker/original-statusline.json`; restore that field in Claude's `settings.json` to undo setup. The collector needs `node` on PATH and writes only usage percentages, reset times, and observation times to `ai-usage-tracker/usage.json`. It never saves the full status-line payload. Usage fields may be absent until Claude Code receives its first response, or for some accounts/sessions. Missing fields retain previous readings; readings older than 15 minutes are marked stale and expired windows are excluded. The tracker reads these files on its normal refresh interval, including manual refresh.
 
 Missing window? The card shows `—` with a tooltip explaining that the
 provider does not expose that window. Signed out / no key / no plan states
@@ -131,7 +143,9 @@ and usage-based Claude billing produce explicit notes.
   `Claude 5h increased 11% between 14:25 and 14:30`, and clears after 30 min
   (configurable).
 - Manual refresh (debounced) + background polling every 5 minutes (min 1) with
-  modest jitter, per-provider timeouts and a single bounded retry.
+  modest jitter, per-provider timeouts and a single bounded retry. HTTP 429
+  responses pause that provider for 15, 30, 60, then up to 120 minutes;
+  manual refresh respects the pause.
 - Failed providers keep their last good values, visibly marked
   `stale · 12m old`; one provider failing never blanks the others.
 - Settings: enable/disable providers, interval, used-vs-remaining percent,
@@ -143,12 +157,12 @@ and usage-based Claude billing produce explicit notes.
 ## Privacy & security
 
 - **No telemetry, no analytics, no backend, no update checks.** The app talks
-  only to the three providers' quota endpoints (and only those).
+  only to enabled providers' metadata endpoints. Claude monitoring uses local files.
 - The Z.ai key lives exclusively in Windows Credential Manager; storing,
   testing, or removing it always asks for confirmation first. It is never
   written to settings files, logs, source, or a `.env`.
-- Claude credentials are read (never written) at poll time; Codex credentials
-  are never touched at all - the CLI handles its own auth.
+- Claude credentials are never read or written. Codex credentials are never
+  touched at all - the CLI handles its own auth.
 - Local history stores only normalized percentages, reset timestamps, provider
   state, and sample times - no prompts, responses, paths, or raw payloads.
 - All diagnostics pass a redaction filter (bearer tokens, API keys, credential
@@ -167,7 +181,7 @@ src/main/
   providers/
     model.js         normalized window model (session/weekly/other) + clamps
     codex.js         Codex CLI app-server JSON-RPC adapter
-    claude.js        Claude Code OAuth usage adapter (read-only login reuse)
+    claude.js        Claude Code local status-line usage adapter
     zai.js           Z.ai Coding Plan quota adapter
     index.js         orchestrator: isolated polls, timeout, 1 retry,
                      cache merge with stale marking
@@ -216,10 +230,12 @@ AITRACKER_DEMO=1 npx electron . --screenshot
 - **Codex card says "Codex CLI not found"** - ensure `codex --version` works
   in a normal terminal (the CLI must be on PATH). Signed-out CLI shows a
   sign-in message; run `codex login` yourself, we never touch its auth.
-- **Claude card says "not signed in"** - sign in once with Claude Code
-  (`claude` then login); the monitor reuses that login read-only.
-- **Claude shows "usage-based API billing" note** - the account has no
-  subscription windows; subscription percentages do not apply.
+- **Claude card says "Enable local capture" / "NO_DATA"** - enable capture for
+  that profile in Settings, then use Claude Code normally and refresh the tracker.
+  Subscription fields are provided after a response and can be absent. Check
+  Claude Code's `/usage` display if fields remain missing. API-key billing does
+  not provide subscription usage percentages. A project or managed status-line
+  override, `disableAllHooks`, or `allowManagedHooksOnly` can prevent capture.
 - **Z.ai card says "No Z.ai API key stored"** - add the key in Settings
   (it goes to Windows Credential Manager). "Key rejected (401/403)" means the
   key is wrong or lacks a Coding Plan; `npm`-style proxies are not used.

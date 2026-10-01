@@ -14,6 +14,9 @@ const MAX_INTERVAL_MINUTES = 1440;
 
 const DEFAULTS = Object.freeze({
   providers: { codex: true, claude: true, zai: true, grok: false, gemini: false, openrouter: false },
+  codexProfiles: [],
+  claudeProfiles: [], // extra config directories; usage comes from local status-line caches
+  claudeActiveProfile: 'claude',
   intervalMinutes: 5,
   percentMode: 'used', // 'used' | 'remaining'
   alwaysOnTop: true,
@@ -45,6 +48,41 @@ function sanitize(raw) {
     for (const id of Object.keys(DEFAULTS.providers)) {
       if (typeof raw.providers[id] === 'boolean') out.providers[id] = raw.providers[id];
     }
+  }
+  if (Array.isArray(raw.claudeProfiles)) {
+    const seenIds = new Set();
+    const seenDirs = new Set();
+    out.claudeProfiles = raw.claudeProfiles.slice(0, 20).flatMap((profile) => {
+      if (!profile || typeof profile !== 'object') return [];
+      const id = typeof profile.id === 'string' ? profile.id : '';
+      const label = typeof profile.label === 'string' ? profile.label.trim().slice(0, 40) : '';
+      const configDir = typeof profile.configDir === 'string' ? profile.configDir.trim().slice(0, 1024) : '';
+      if (!/^claude-profile-[a-z0-9-]{1,64}$/.test(id) || !label || !configDir || seenIds.has(id)) return [];
+      const normalizedDir = configDir.toLowerCase();
+      if (seenDirs.has(normalizedDir)) return [];
+      seenIds.add(id);
+      seenDirs.add(normalizedDir);
+      return [{ id, label, configDir }];
+    });
+  }
+  if (raw.claudeActiveProfile === 'claude' || out.claudeProfiles.some((p) => p.id === raw.claudeActiveProfile)) {
+    out.claudeActiveProfile = raw.claudeActiveProfile;
+  }
+  if (Array.isArray(raw.codexProfiles)) {
+    const seenIds = new Set();
+    const seenDirs = new Set();
+    out.codexProfiles = raw.codexProfiles.slice(0, 20).flatMap((profile) => {
+      if (!profile || typeof profile !== 'object') return [];
+      const id = typeof profile.id === 'string' ? profile.id : '';
+      const label = typeof profile.label === 'string' ? profile.label.trim().slice(0, 40) : '';
+      const configDir = typeof profile.configDir === 'string' ? profile.configDir.trim().slice(0, 1024) : '';
+      if (!/^codex-profile-[a-z0-9-]{1,64}$/.test(id) || !label || !configDir || seenIds.has(id)) return [];
+      const normalizedDir = configDir.toLowerCase();
+      if (seenDirs.has(normalizedDir)) return [];
+      seenIds.add(id);
+      seenDirs.add(normalizedDir);
+      return [{ id, label, configDir }];
+    });
   }
   if (raw.intervalMinutes !== undefined) out.intervalMinutes = clampNumber(raw.intervalMinutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES, DEFAULTS.intervalMinutes);
   if (raw.percentMode === 'remaining') out.percentMode = 'remaining';

@@ -19,9 +19,11 @@ const DEFAULT_BASE_URL = 'https://openrouter.ai';
 const KEY_PATH = '/api/v1/key';
 const CREDITS_PATH = '/api/v1/credits';
 
-async function getJson(fetchImpl, url, key) {
+async function getJson(fetchImpl, url, key, signal) {
+  if (signal) signal.throwIfAborted();
   const res = await fetchImpl(url, {
     method: 'GET',
+    signal,
     headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
   });
   if (res.status === 401 || res.status === 403) {
@@ -87,14 +89,16 @@ function normalizeOpenRouter(keyData, creditsData) {
 
 /** Transport. `deps`: { fetchImpl, getKey, baseUrl }. */
 async function fetchOpenRouterQuotas(deps = {}) {
+  if (deps.signal) deps.signal.throwIfAborted();
   const fetchImpl = deps.fetchImpl || fetch;
   const baseUrl = (deps.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const key = typeof deps.getKey === 'function' ? await deps.getKey() : null;
+  if (deps.signal) deps.signal.throwIfAborted();
   if (!key) return errorSnapshot('openrouter', 'NO_KEY', 'No OpenRouter API key stored (add it in Settings)');
 
   let keyResp;
   try {
-    keyResp = await getJson(fetchImpl, `${baseUrl}${KEY_PATH}`, key);
+    keyResp = await getJson(fetchImpl, `${baseUrl}${KEY_PATH}`, key, deps.signal);
   } catch (cause) {
     return errorSnapshot('openrouter', 'NETWORK', `OpenRouter endpoint unreachable: ${cause.message}`);
   }
@@ -107,10 +111,13 @@ async function fetchOpenRouterQuotas(deps = {}) {
   if (!(Number.isFinite(limit) && limit > 0)) {
     // Pay-as-you-go key: fall back to the prepaid balance endpoint.
     try {
-      creditsResp = await getJson(fetchImpl, `${baseUrl}${CREDITS_PATH}`, key);
+      creditsResp = await getJson(fetchImpl, `${baseUrl}${CREDITS_PATH}`, key, deps.signal);
     } catch {
       creditsResp = null; // balance is optional; key info already succeeded
     }
+  }
+  if (creditsResp && creditsResp.error === 'HTTP_429') {
+    return errorSnapshot('openrouter', 'HTTP_429', 'OpenRouter /credits rate limited');
   }
 
   const creditsData = creditsResp && creditsResp.body && creditsResp.body.data

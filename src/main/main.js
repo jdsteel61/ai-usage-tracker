@@ -7,6 +7,11 @@
  * windows, living in the notification area. See README.md for architecture.
  */
 const path = require('path');
+const { installCapture, usagePath } = require('./claudeStatusline');
+const { watchClaudeUsage } = require('./claudeWatcher');
+const { fetchClaudeQuotas } = require('./providers/claude');
+const { loadReadings, saveReadings } = require('./readingCache');
+const os = require('os');
 const {
   app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, nativeTheme, screen, clipboard, powerMonitor,
 } = require('electron');
@@ -53,6 +58,44 @@ let scheduler = null;
 let activeAlerts = {};
 let lastSnapshot = null; // newest reading, replayed into a rebuilt window
 let lastMerged = {};      // raw merged provider map from the last poll
+let readingsPath = null;
+let stopClaudeWatcher = null;
+let watchedClaudePath = null;
+let claudeWatchGeneration = 0;
+
+function configuredIds(s = settings.get()) {
+  return [...Object.keys(s.providers), ...s.codexProfiles.map((p) => p.id),
+    ...s.claudeProfiles.map((p) => p.id)];
+}
+
+function configureClaudeWatcher() {
+  const s = settings.get();
+  const profile = s.claudeProfiles.find((p) => p.id === s.claudeActiveProfile);
+  const configDir = s.claudeActiveProfile === 'claude' ? path.join(os.homedir(), '.claude')
+    : profile && profile.configDir;
+  const filePath = !IS_DEMO && s.providers.claude && configDir ? usagePath(configDir) : null;
+  if (filePath === watchedClaudePath) return;
+  if (stopClaudeWatcher) stopClaudeWatcher();
+  stopClaudeWatcher = null;
+  watchedClaudePath = filePath;
+  const generation = ++claudeWatchGeneration;
+  if (!filePath) return;
+  const id = s.claudeActiveProfile;
+  const refresh = async () => {
+    const snap = await fetchClaudeQuotas({ configDir });
+    if (generation !== claudeWatchGeneration) return;
+    const fresh = { [id]: { ...snap, providerId: id } };
+    for (const other of ['claude', ...settings.get().claudeProfiles.map((p) => p.id)]) {
+      if (other !== id) fresh[other] = { providerId: other, ok: false,
+        error: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' },
+        fetchedAt: Date.now() };
+    }
+    applyFreshReadings(fresh);
+  };
+  const update = () => refresh().catch((cause) => log.warn('claude-watch', cause.message));
+  stopClaudeWatcher = watchClaudeUsage(filePath, update);
+  update();
+}
 
 function main() {
   app.on('second-instance', () => {
@@ -63,6 +106,12 @@ function main() {
     const userData = app.getPath('userData');
     settings = new SettingsStore(path.join(userData, 'settings.json'));
     settings.load();
+    readingsPath = path.join(userData, 'readings.json');
+    lastMerged = {
+      ...loadReadings(path.join(userData, 'claude-readings.json'),
+        ['claude', ...settings.get().claudeProfiles.map((profile) => profile.id)]),
+      ...loadReadings(readingsPath, configuredIds()),
+    };
     history = new HistoryStore(path.join(userData, 'history.json'));
     history.load();
     history.prune();
@@ -77,6 +126,8 @@ function main() {
     registerIpc();
 
     scheduler = new Scheduler(pollProvidersOnce);
+    configureClaudeWatcher();
+    broadcast(lastMerged, Date.now());
     scheduler.start(settings.get().intervalMinutes);
 
     // Data goes stale while the machine sleeps or is locked: refresh as soon
@@ -97,6 +148,8 @@ function main() {
 
   app.on('before-quit', () => {
     if (scheduler) scheduler.stop(); // graceful cancellation of in-flight polls
+    if (stopClaudeWatcher) stopClaudeWatcher();
+    claudeWatchGeneration++;
   });
 }
 
@@ -197,7 +250,7 @@ function rebuildTrayMenu(fill = 0) {
 
 // ---------------------------------------------------------------- polling
 
-async function pollProvidersOnce() {
+async function pollProvidersOnce(signal) {
   log.debug('poll', 'poll starting');
   if (IS_DEMO) {
     const fixturePath = process.env.AITRACKER_DEMO_FIXTURE
@@ -218,11 +271,15 @@ async function pollProvidersOnce() {
   }
 
   const s = settings.get();
-  const enabled = Object.entries(s.providers).filter(([, on]) => on).map(([id]) => id);
+  const enabled = Object.entries(s.providers).filter(([id, on]) => on && id !== 'claude').map(([id]) => id);
+  if (s.providers.codex) enabled.push(...s.codexProfiles.map((profile) => profile.id));
+  const claudeIds = ['claude', ...s.claudeProfiles.map((profile) => profile.id)];
   const getKeyFor = (target) => async () => {
     try { return await credentials.readSecret({ target }); } catch { return null; }
   };
   const registry = createRegistry({
+    codexProfiles: s.codexProfiles,
+    claudeProfiles: s.claudeProfiles,
     zaiDeps: {
       getKey: getKeyFor(credentials.TARGET),
       baseUrl: s.zaiBaseUrl,
@@ -232,10 +289,37 @@ async function pollProvidersOnce() {
     openrouterDeps: { getKey: getKeyFor('ai-usage-tracker:openrouter-api-key') },
   }).filter((p) => enabled.includes(p.id));
 
-  const fresh = await pollAll(registry, { baseUrl: s.zaiBaseUrl });
+  const fresh = await pollAll(registry, { signal });
+  if (signal && signal.aborted) return;
+  // The local watcher may have delivered newer Claude data while network polls ran.
+  for (const id of claudeIds) delete fresh[id];
+  const current = settings.get();
+  if (current.providers.claude) {
+    const profile = current.claudeProfiles.find((p) => p.id === current.claudeActiveProfile);
+    const snap = await fetchClaudeQuotas({ configDir: profile && profile.configDir });
+    if (signal && signal.aborted) return;
+    fresh[current.claudeActiveProfile] = { ...snap, providerId: current.claudeActiveProfile };
+  }
+  if (current.providers.claude) {
+    for (const id of ['claude', ...current.claudeProfiles.map((p) => p.id)]) {
+      if (id !== current.claudeActiveProfile) {
+        fresh[id] = {
+          providerId: id, ok: false, fetchedAt: Date.now(),
+          error: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' },
+        };
+      }
+    }
+  }
+  applyFreshReadings(fresh);
+}
+
+function applyFreshReadings(fresh) {
+  const s = settings.get();
   for (const [id, snap] of Object.entries(fresh)) {
     if (!snap.ok) {
-      log.warn('poll', `${id}: ${snap.error ? snap.error.code : 'unknown'} - ${snap.error ? snap.error.message : ''}`);
+      if (snap.error && snap.error.code !== 'PAUSED' && !snap.cooldown) {
+        log.warn('poll', `${id}: ${snap.error.code} - ${snap.error.message}`);
+      }
     } else {
       const ws = Array.isArray(snap.windows) ? snap.windows : [];
       const meaningful = ws.filter((w) => w.kind === 'session' || w.kind === 'weekly').length;
@@ -245,20 +329,30 @@ async function pollProvidersOnce() {
       }
     }
   }
-  const merged = mergeWithCache(fresh, lastMerged);
+  const previousMerged = lastMerged;
+  const merged = { ...lastMerged, ...mergeWithCache(fresh, lastMerged) };
   lastMerged = merged;
+  if (Object.values(fresh).some((snap) => snap && snap.ok)) {
+    try { saveReadings(readingsPath, merged, configuredIds()); }
+    catch (cause) { log.warn('poll', `Could not save last readings: ${cause.message}`); }
+  }
 
-  // History + spike detection on ok (or cached-ok) snapshots.
+  // Only fresh readings enter history or spike detection.
   const now = Date.now();
-  for (const snap of Object.values(merged)) {
-    const effective = snap.ok ? snap : (snap.stale ? { ...snap, ok: true } : snap);
-    if (!effective.ok) continue;
-    ingestSnapshot(history, effective, now);
-    for (const w of effective.windows) {
+  for (const snap of Object.values(fresh)) {
+    if (!snap.ok || snap.stale || (previousMerged[snap.providerId]?.fetchedAt === snap.fetchedAt
+      && JSON.stringify(previousMerged[snap.providerId]?.windows) === JSON.stringify(snap.windows))) continue;
+    if (snap.notes?.includes('From Claude Code status line')) {
+      const lastSampleAt = Math.max(0, ...['session', 'weekly'].map((kind) =>
+        history.get(snap.providerId, kind).at(-1)?.t || 0));
+      if (snap.fetchedAt - lastSampleAt < s.intervalMinutes * 60_000) continue;
+    }
+    ingestSnapshot(history, snap, snap.fetchedAt || now);
+    for (const w of snap.windows) {
       if (w.kind !== 'session' && w.kind !== 'weekly') continue;
       if (!Number.isFinite(w.usedPercent)) continue;
-      const samples = history.get(effective.providerId, w.kind);
-      const alert = detectSpike(effective.providerId, w.kind, samples, {
+      const samples = history.get(snap.providerId, w.kind);
+      const alert = detectSpike(snap.providerId, w.kind, samples, {
         intervalMinutes: s.intervalMinutes,
         absolutePoints: s.spikeAbsolutePoints,
         relativePoints: s.spikeRelativePoints,
@@ -271,7 +365,8 @@ async function pollProvidersOnce() {
     }
   }
   history.prune(now);
-  history.save();
+  try { history.save(); }
+  catch (cause) { log.warn('history', `Could not save history: ${cause.message}`); }
 
   broadcast(merged, now);
 }
@@ -297,7 +392,7 @@ function broadcast(merged, now) {
 function updateTrayFromSnapshot(snapshot) {
   let max = 0;
   for (const p of snapshot.providers) {
-    if (!p.ok) continue;
+    if (!p.ok || p.enabled === false) continue;
     for (const kind of ['session', 'weekly']) {
       const w = p.windows[kind];
       if (w && Number.isFinite(w.usedPercent)) max = Math.max(max, w.usedPercent);
@@ -306,7 +401,7 @@ function updateTrayFromSnapshot(snapshot) {
   const fill = max / 100;
   rebuildTrayMenu(fill);
   if (tray) {
-    const parts = snapshot.providers.filter((p) => p.ok).map((p) => {
+    const parts = snapshot.providers.filter((p) => p.ok && p.enabled !== false).map((p) => {
       const s = p.windows.session ? `${Math.round(p.windows.session.usedPercent)}%` : '—';
       const w = p.windows.weekly ? `${Math.round(p.windows.weekly.usedPercent)}%` : '—';
       return `${p.title}: ${s} / ${w}`;
@@ -350,6 +445,7 @@ function registerIpc() {
       if (next.intervalMinutes !== before.intervalMinutes && scheduler) {
         scheduler.start(next.intervalMinutes);
       }
+      configureClaudeWatcher();
       if (next.launchAtLogin !== before.launchAtLogin) {
         applyLoginItemSettings();
       }
@@ -360,6 +456,66 @@ function registerIpc() {
     rebuildTrayMenu();
     broadcast(lastMerged, Date.now());
     return { ...next };
+  });
+
+  async function addSubscriptionProfile(provider) {
+    const kind = provider === 'codex' ? 'Codex' : 'Claude Code';
+    const settingKey = provider === 'codex' ? 'codexProfiles' : 'claudeProfiles';
+    const defaultDir = provider === 'codex'
+      ? (process.env.CODEX_HOME || path.join(os.homedir(), '.codex'))
+      : path.join(os.homedir(), '.claude');
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: `Choose a ${kind} profile folder`,
+      defaultPath: os.homedir(),
+      properties: ['openDirectory'],
+    });
+    if (picked.canceled || !picked.filePaths[0]) return { ok: false, canceled: true };
+    const configDir = path.resolve(picked.filePaths[0]);
+    const profiles = settings.get()[settingKey];
+    if ([defaultDir, ...profiles.map((p) => p.configDir)].some((dir) => path.resolve(dir).toLowerCase() === configDir.toLowerCase())) {
+      return { ok: false, error: `That ${kind} profile is already being tracked.` };
+    }
+    if (profiles.length >= 20) return { ok: false, error: `The tracker supports up to 20 additional ${kind} profiles.` };
+    const folder = path.basename(configDir).replace(/^\./, '').replace(/^(claude|codex)[-_]*/i, '');
+    const readable = folder.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'Profile';
+    const label = `${provider === 'codex' ? 'Codex' : 'Claude'} ${readable}`.slice(0, 40);
+    const prefix = provider === 'codex' ? 'codex-profile-' : 'claude-profile-';
+    const base = `${prefix}${folder.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 36) || 'extra'}`;
+    const used = new Set(profiles.map((p) => p.id));
+    let id = base;
+    let suffix = 2;
+    while (used.has(id)) id = `${base}-${suffix++}`;
+    const next = settings.patch({ [settingKey]: [...profiles, { id, label, configDir }] });
+    configureClaudeWatcher();
+    if (provider === 'codex' && scheduler) scheduler.refreshNow();
+    broadcast(lastMerged, Date.now());
+    return { ok: true, settings: { ...next } };
+  }
+  ipcMain.handle('subscription-profile:add', (_e, provider) => {
+    if (provider !== 'codex' && provider !== 'claude') return { ok: false, error: 'Unknown provider' };
+    return addSubscriptionProfile(provider);
+  });
+  ipcMain.handle('subscription-profile:remove', (_e, provider, profileId) => {
+    const settingKey = provider === 'codex' ? 'codexProfiles' : provider === 'claude' ? 'claudeProfiles' : null;
+    if (!settingKey) return { ...settings.get() };
+    const next = settings.patch({ [settingKey]: settings.get()[settingKey].filter((p) => p.id !== profileId) });
+    configureClaudeWatcher();
+    if (provider === 'codex' && scheduler) scheduler.refreshNow();
+    broadcast(lastMerged, Date.now());
+    return { ...next };
+  });
+
+  ipcMain.handle('claude:enableCapture', (_e, id) => {
+    const profile = settings.get().claudeProfiles.find((p) => p.id === id);
+    const configDir = id === 'claude' ? path.join(os.homedir(), '.claude') : profile && profile.configDir;
+    if (!configDir) return { ok: false, error: 'Unknown Claude profile' };
+    try {
+      const result = installCapture(configDir);
+      configureClaudeWatcher();
+      return result;
+    } catch (cause) {
+      return { ok: false, error: cause.message };
+    }
   });
 
   // Every action below touches a REAL stored credential. Each one requires an

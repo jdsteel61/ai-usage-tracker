@@ -33,15 +33,18 @@ function normalizeGeminiKeyCheck(body) {
 
 /** Transport. `deps`: { fetchImpl, getKey, baseUrl }. */
 async function fetchGeminiQuotas(deps = {}) {
+  if (deps.signal) deps.signal.throwIfAborted();
   const fetchImpl = deps.fetchImpl || fetch;
   const baseUrl = (deps.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const key = typeof deps.getKey === 'function' ? await deps.getKey() : null;
+  if (deps.signal) deps.signal.throwIfAborted();
   if (!key) return errorSnapshot('gemini', 'NO_KEY', 'No Gemini API key stored (add it in Settings)');
 
   let res;
   try {
     res = await fetchImpl(`${baseUrl}${MODELS_PATH}?pageSize=1`, {
       method: 'GET',
+      signal: deps.signal,
       headers: { Accept: 'application/json', 'x-goog-api-key': key },
     });
   } catch (cause) {

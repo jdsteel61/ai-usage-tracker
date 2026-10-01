@@ -50,6 +50,18 @@
         <label class="row"><input type="checkbox" id="set-prov-gemini" /> Gemini</label>
         <label class="row"><input type="checkbox" id="set-prov-openrouter" /> OpenRouter</label>
       </div>
+      <div class="provider-profiles">
+        <div class="row"><strong>Codex CLI profiles</strong><button id="btn-codex-profile-add" class="small-btn">Add profile…</button></div>
+        <p class="hint">Choose another signed-in Codex home folder. Each profile gets a separate card and history.</p>
+        <div id="codex-profiles-list"></div>
+      </div>
+      <div class="claude-profiles">
+        <div class="row"><strong>Claude Code profiles</strong><button id="btn-claude-profile-add" class="small-btn">Add profile…</button></div>
+        <p class="hint">Usage updates while you use Claude Code. Enable local capture for each account; other cards retain their last reading.</p>
+        <label class="row">Active Claude account <select id="set-claude-active"></select></label>
+        <div class="row"><span>Claude</span><button id="btn-claude-capture" class="small-btn">Enable local capture</button></div>
+        <div id="claude-profiles-list"></div>
+      </div>
 
       <h3>Refresh &amp; display</h3>
       <label class="row">Interval (min, min 1)

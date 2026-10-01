@@ -128,15 +128,18 @@ function normalizeZaiQuota(body) {
  * `getKey` must return the secret string or null (never logged).
  */
 async function fetchZaiQuotas(deps = {}) {
+  if (deps.signal) deps.signal.throwIfAborted();
   const fetchImpl = deps.fetchImpl || fetch;
   const baseUrl = (deps.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const key = typeof deps.getKey === 'function' ? await deps.getKey() : null;
+  if (deps.signal) deps.signal.throwIfAborted();
   if (!key) return errorSnapshot('zai', 'NO_KEY', 'No Z.ai API key stored (add it in Settings)');
 
   let res;
   try {
     res = await fetchImpl(`${baseUrl}${QUOTA_PATH}`, {
       method: 'GET',
+      signal: deps.signal,
       headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
     });
   } catch (cause) {

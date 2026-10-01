@@ -61,6 +61,7 @@ function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
     stale: !!snap.stale,
     fetchedAt: snap.fetchedAt,
     staleAgeLabel: snap.stale && snap.ok ? formatAge(snap.fetchedAt, now) : null,
+    source: snap.source || (Array.isArray(snap.notes) && snap.notes.includes('From Claude Code status line') ? 'claude-statusline' : null),
     error: snap.error || (snap.lastError || null),
     notes: Array.isArray(snap.notes) ? snap.notes : [],
     windows: byKind,
@@ -75,13 +76,30 @@ function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
 
 /** Shape the full broadcast payload. Never throws for any provider state. */
 function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now() } = {}) {
-  const providers = ORDER.map((id) => shapeProvider(id, (merged || {})[id], {
-    enabled: settings ? settings.providers[id] !== false : true,
-    activeAlerts,
-    now,
-  }));
+  const profiles = settings && Array.isArray(settings.claudeProfiles) ? settings.claudeProfiles : [];
+  const codexProfiles = settings && Array.isArray(settings.codexProfiles) ? settings.codexProfiles : [];
+  const ids = [ORDER[0], ...codexProfiles.map((p) => p.id), ORDER[1], ...profiles.map((p) => p.id), ...ORDER.slice(2)];
+  const titles = { ...TITLES, ...Object.fromEntries([...codexProfiles, ...profiles].map((p) => [p.id, p.label])) };
+  const providers = ids.map((id) => {
+    const inactiveClaude = settings && settings.providers.claude !== false
+      && (id === 'claude' || id.startsWith('claude-profile-'))
+      && id !== (settings.claudeActiveProfile || 'claude');
+    const stored = (merged || {})[id];
+    const snap = inactiveClaude && stored && stored.ok
+      ? { ...stored, stale: true, lastError: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' } }
+      : inactiveClaude && !stored
+        ? { providerId: id, ok: false, error: { code: 'PAUSED', message: 'No local reading yet' } }
+        : stored;
+    return shapeProvider(id, snap, {
+      enabled: settings ? (id.startsWith('claude-profile-') ? settings.providers.claude !== false
+        : id.startsWith('codex-profile-') ? settings.providers.codex !== false : settings.providers[id] !== false) : true,
+      activeAlerts,
+      now,
+    });
+  }).map((provider) => ({ ...provider, title: titles[provider.id] || provider.title }));
   return {
     now,
+    claudeActiveProfile: settings ? settings.claudeActiveProfile || 'claude' : 'claude',
     clock24: settings ? settings.clock24 !== false : true,
     percentMode: settings ? settings.percentMode : 'used',
     providers,

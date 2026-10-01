@@ -62,6 +62,30 @@ test('shapeSnapshot: stale cached snapshot keeps windows and gains age label', (
   assert.ok(claude.windows.session, 'cached windows preserved');
 });
 
+test('shapeProvider: local reading source and cooldown metadata survive shaping', () => {
+  const retryAt = NOW + 60_000;
+  const view = shapeProvider('claude', {
+    ...okSnap('claude'), stale: true, notes: ['From Claude Code status line'],
+    lastError: { code: 'RATE_LIMITED', retryAt },
+  }, { enabled: true, activeAlerts: {}, now: NOW });
+  assert.equal(view.source, 'claude-statusline');
+  assert.equal(view.fetchedAt, NOW - 30_000);
+  assert.equal(view.error.retryAt, retryAt);
+});
+
+test('shapeSnapshot: inactive Claude profile shows its last reading as paused', () => {
+  const profile = { id: 'claude-profile-work', label: 'Claude Work', configDir: 'C:\\claude-work' };
+  const settings = { ...DEFAULTS, claudeProfiles: [profile], claudeActiveProfile: 'claude' };
+  const view = shapeSnapshot({ claude: okSnap('claude'), [profile.id]: okSnap(profile.id) },
+    { settings, now: NOW });
+  const work = view.providers.find((p) => p.id === profile.id);
+  assert.equal(work.ok, true);
+  assert.equal(work.stale, true);
+  assert.equal(work.error.code, 'PAUSED');
+  assert.equal(work.windows.session.usedPercent, 10);
+  assert.equal(view.providers.find((p) => p.id === 'claude').stale, false);
+});
+
 test('shapeSnapshot: snapshot missing notes/windows fields entirely is tolerated', () => {
   const merged = { claude: { providerId: 'claude', ok: true, fetchedAt: NOW } };
   const view = shapeSnapshot(merged, { settings: { ...DEFAULTS }, activeAlerts: {}, now: NOW });

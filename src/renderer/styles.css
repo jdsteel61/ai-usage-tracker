@@ -212,6 +212,10 @@ html, body {
 }
 .provider-name { font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; }
 .provider-plan { color: var(--muted); font-size: 9.5px; }
+.provider-profiles, .claude-profiles { margin: 3px 0 8px 14px; }
+.provider-profiles .row, .claude-profiles .row { justify-content: space-between; }
+.provider-profiles .hint, .claude-profiles .hint { margin: 2px 0 4px; }
+.claude-profile-row { padding: 2px 0; font-size: 10px; }
 
 .peak-badge {
   font-size: 8px;
@@ -246,8 +250,8 @@ html, body {
   padding: 0 3px;
 }
 
-.card-error { color: var(--muted); font-size: 10.5px; padding: 1px 0; }
-.card-note { color: var(--muted); font-size: 9.5px; margin-top: 1px; }
+.card-error { color: var(--muted); font-size: 9px; padding: 1px 0; }
+.card-note { color: var(--muted); font-size: 8.5px; margin-top: 1px; }
 
 .wrow {
   display: grid;
@@ -327,6 +331,36 @@ html, body {
 .row input[type="number"] { width: 56px; }
 .row input[type="url"], .row input[type="password"] { width: 160px; }
 .row select { width: 104px; }
+/* Quiet account switches; source and age details live in the status tooltip. */
+.claude-toggle {
+  position: relative;
+  width: 24px;
+  height: 13px;
+  flex: 0 0 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bar-track);
+  cursor: pointer;
+}
+.claude-toggle::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  top: 1px;
+  left: 1px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 120ms ease;
+}
+.claude-toggle[aria-checked="true"] { background: #0f766e; border-color: #0f766e; }
+.claude-toggle[aria-checked="true"]::after { transform: translateX(11px); background: #fff; }
+.claude-toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.claude-toggle:disabled { opacity: 0.5; cursor: wait; }
+.claude-status { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); cursor: help; }
+.claude-status.ready { background: #14b8a6; }
+.claude-status.waiting { background: #f59e0b; }
 .row input[type="number"], .row input[type="url"], .row input[type="password"], .row select {
   background: var(--card);
   color: var(--text);

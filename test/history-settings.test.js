@@ -79,6 +79,13 @@ test('settings: interval has a safe minimum of one minute', () => {
   assert.equal(sanitize({ intervalMinutes: 'ten' }).intervalMinutes, 5);
 });
 
+test('settings: only a configured Claude profile can be active', () => {
+  const profile = { id: 'claude-profile-work', label: 'Claude Work', configDir: 'C:\\claude-work' };
+  assert.equal(sanitize({ claudeProfiles: [profile], claudeActiveProfile: profile.id }).claudeActiveProfile, profile.id);
+  assert.equal(sanitize({ claudeActiveProfile: profile.id }).claudeActiveProfile, 'claude');
+  assert.equal(sanitize({ claudeProfiles: [profile], claudeActiveProfile: 'unknown' }).claudeActiveProfile, 'claude');
+});
+
 test('settings: secret-shaped keys are refused during load', () => {
   const file = tmpFile('s.json');
   fs.writeFileSync(file, JSON.stringify({ intervalMinutes: 10, zaiApiKey: 'sk-super-secret' }));

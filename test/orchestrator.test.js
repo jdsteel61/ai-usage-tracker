@@ -61,6 +61,34 @@ test('isRetryable classification', () => {
   assert.equal(isRetryable('NO_KEY'), false);
 });
 
+test('429 backs off per provider and retries after the cooldown', async () => {
+  const cooldowns = new Map();
+  let currentTime = 1_000_000;
+  let calls = 0;
+  const provider = { id: 'limited', fetchQuotas: async () => { calls++; return errSnap('limited', 'HTTP_429'); } };
+  const deps = { retries: 0, now: () => currentTime, rateLimitState: cooldowns };
+
+  await pollProvider(provider, deps);
+  assert.equal(calls, 1);
+  assert.equal(cooldowns.get('limited').retryAt, currentTime + 15 * 60_000);
+  currentTime += 5 * 60_000;
+  const skipped = await pollProvider(provider, deps);
+  assert.equal(skipped.error.code, 'HTTP_429');
+  assert.equal(calls, 1);
+
+  const other = { id: 'other', fetchQuotas: async () => okSnap('other') };
+  assert.equal((await pollProvider(other, deps)).ok, true);
+  currentTime += 10 * 60_000;
+  await pollProvider(provider, deps);
+  assert.equal(calls, 2);
+  assert.equal(cooldowns.get('limited').retryAt, currentTime + 30 * 60_000);
+
+  currentTime += 30 * 60_000;
+  provider.fetchQuotas = async () => okSnap('limited');
+  assert.equal((await pollProvider(provider, deps)).ok, true);
+  assert.equal(cooldowns.has('limited'), false);
+});
+
 test('failed provider keeps cached windows flagged stale with age', () => {
   const cached = okSnap('a');
   cached.fetchedAt = Date.now() - 12 * 60_000;

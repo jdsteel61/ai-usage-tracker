@@ -110,15 +110,18 @@ function normalizeGrokKeyInfo(body) {
 
 /** Transport. `deps`: { fetchImpl, getKey, baseUrl }. */
 async function fetchGrokQuotas(deps = {}) {
+  if (deps.signal) deps.signal.throwIfAborted();
   const fetchImpl = deps.fetchImpl || fetch;
   const baseUrl = (deps.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
   const key = typeof deps.getKey === 'function' ? await deps.getKey() : null;
+  if (deps.signal) deps.signal.throwIfAborted();
   if (!key) return errorSnapshot('grok', 'NO_KEY', 'No Grok (xAI) API key stored (add it in Settings)');
 
   let res;
   try {
     res = await fetchImpl(`${baseUrl}${KEY_PATH}`, {
       method: 'GET',
+      signal: deps.signal,
       headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
     });
   } catch (cause) {

@@ -3,3 +3,4 @@ dist/
 *.log
 .upstream/
 .env
+dist-ui/

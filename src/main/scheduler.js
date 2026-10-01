@@ -1,4 +1,5 @@
 'use strict';
+const { AbortController } = globalThis;
 
 /**
  * Background poll scheduler.
@@ -25,6 +26,8 @@ class Scheduler {
     this.manualQueued = false;
     this.lastManualAt = 0;
     this.lastRunAt = 0;
+    this.controller = null;
+    this.pendingGeneration = null;
   }
 
   intervalWithJitter(intervalMs) {
@@ -50,20 +53,33 @@ class Scheduler {
   /** One guarded run; re-entrancy protected. */
   async runOnce(gen) {
     if (gen !== this.generation) return;
-    if (this.inFlight) return;
+    if (this.inFlight) {
+      if (this.runningGeneration !== gen) this.pendingGeneration = gen;
+      return;
+    }
     this.inFlight = true;
+    this.runningGeneration = gen;
+    const controller = new AbortController();
+    this.controller = controller;
     this.lastRunAt = Date.now();
     try {
-      await this.runFn();
+      await this.runFn(controller.signal);
     } catch {
       // runFn contract says never throw; belt and braces.
     } finally {
       this.inFlight = false;
-      // A manual refresh that arrived mid-flight runs once the current poll
-      // completes (coalesced, not dropped).
-      if (this.manualQueued && gen === this.generation) {
+      this.controller = null;
+      if (this.pendingGeneration === this.generation) {
+        this.pendingGeneration = null;
         this.manualQueued = false;
-        this.runOnce(gen);
+        this.runOnce(this.generation);
+      } else {
+        this.pendingGeneration = null;
+        // A manual refresh mid-flight runs once the current poll completes.
+        if (this.manualQueued && gen === this.generation) {
+          this.manualQueued = false;
+          this.runOnce(gen);
+        }
       }
     }
   }
@@ -88,6 +104,9 @@ class Scheduler {
       this.timer = null;
     }
     this.generation++;
+    this.pendingGeneration = null;
+    this.manualQueued = false;
+    if (this.controller) this.controller.abort();
   }
 }
 

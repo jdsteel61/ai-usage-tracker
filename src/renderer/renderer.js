@@ -161,6 +161,7 @@
   function renderProvider(p) {
     const card = document.createElement('div');
     card.className = 'card';
+    const isClaude = p.id === 'claude' || p.id.startsWith('claude-profile-');
 
     const head = document.createElement('div');
     head.className = 'card-head';
@@ -217,11 +218,47 @@
       spike.addEventListener('click', () => showToast(p.spike.description));
       head.appendChild(spike);
     }
-    if (p.stale && p.ok) {
+    if (isClaude) {
+      const active = p.id === (snapshot.claudeActiveProfile || 'claude');
+      const indicator = document.createElement('span');
+      indicator.className = `claude-status ${!active ? 'paused' : p.ok && !p.stale ? 'ready' : 'waiting'}`;
+      indicator.setAttribute('data-tip', [!active ? 'Paused account: showing its last reading'
+        : p.ok && !p.stale ? 'Usage captured locally from Claude Code' : 'Waiting for fresh Claude Code usage',
+      p.staleAgeLabel ? `Reading age: ${p.staleAgeLabel}` : '', p.error?.message || ''].filter(Boolean).join('\n'));
+      indicator.setAttribute('aria-label', !active ? 'Paused' : p.ok && !p.stale ? 'Current local reading' : 'Waiting for usage');
+      head.appendChild(indicator);
+      const accounts = snapshot.providers.filter((account) => account.enabled
+        && (account.id === 'claude' || account.id.startsWith('claude-profile-')));
+      if (accounts.length > 1) {
+        const toggle = document.createElement('button');
+        toggle.className = 'claude-toggle';
+        toggle.type = 'button';
+        toggle.setAttribute('role', 'switch');
+        toggle.setAttribute('aria-checked', String(active));
+        toggle.setAttribute('aria-label', `Monitor ${p.title}`);
+        toggle.addEventListener('click', async () => {
+          const next = active ? accounts.find((account) => account.id !== p.id).id : p.id;
+          const switches = cards.querySelectorAll('.claude-toggle');
+          switches.forEach((button) => { button.disabled = true; });
+          try {
+            settings = await window.tracker.saveSettings({ claudeActiveProfile: next });
+            renderActiveClaudeSelect();
+            render({ ...snapshot, claudeActiveProfile: settings.claudeActiveProfile });
+          } catch { showToast('Could not switch Claude account'); }
+          finally { switches.forEach((button) => { button.disabled = false; }); }
+        });
+        head.appendChild(toggle);
+      }
+    }
+    if (!isClaude && p.stale && p.ok) {
       const badge = document.createElement('span');
       badge.className = 'stale-badge';
-      badge.textContent = `stale \u00b7 ${p.staleAgeLabel || ''}`.trim();
-      badge.title = 'Last successful poll; provider currently unreachable or erroring';
+      badge.textContent = `${p.error && p.error.code === 'PAUSED' ? 'paused' : 'stale'} \u00b7 ${p.staleAgeLabel || ''}`.trim();
+      badge.title = p.error && p.error.code === 'PAUSED'
+        ? 'Last reading; this Claude account is not being monitored'
+        : (p.notes || []).includes('From Claude Code status line')
+          ? 'Last usage received from Claude Code; waiting for another reading'
+          : 'Last successful poll; provider currently unreachable or erroring';
       head.appendChild(badge);
     }
     card.appendChild(head);
@@ -229,7 +266,10 @@
     if (!p.ok) {
       const err = document.createElement('div');
       err.className = 'card-error';
-      err.textContent = p.error && p.error.message ? p.error.message : 'Unavailable';
+      err.textContent = isClaude
+        ? (p.error?.code === 'PAUSED' ? 'No saved reading' : 'Waiting for usage')
+        : p.error && p.error.message ? p.error.message : 'Unavailable';
+      if (isClaude) err.setAttribute('data-tip', p.error?.message || 'Use Claude Code to capture usage');
       err.title = p.error && p.error.code ? `code: ${p.error.code}` : '';
       card.appendChild(err);
     } else {
@@ -247,6 +287,7 @@
       }
       // Providers with no quota windows at all (e.g. Gemini) show notes only.
       for (const note of p.notes || []) {
+        if (isClaude && note === 'From Claude Code status line') continue;
         const n = document.createElement('div');
         n.className = 'card-note';
         n.textContent = note;
@@ -451,7 +492,76 @@
     document.getElementById('set-spike-rel-mult').value = settings.spikeRelativeMultiplier;
     document.getElementById('set-spike-minutes').value = settings.spikeAlertMinutes;
     document.getElementById('set-zai-url').value = settings.zaiBaseUrl;
+    renderSubscriptionProfiles('codex', settings.codexProfiles || []);
+    renderSubscriptionProfiles('claude', settings.claudeProfiles || []);
+    renderActiveClaudeSelect();
     await refreshKeyStatuses();
+  }
+
+  function renderSubscriptionProfiles(provider, profiles) {
+    const host = document.getElementById(`${provider}-profiles-list`);
+    host.replaceChildren();
+    for (const profile of profiles) {
+      const row = document.createElement('div');
+      row.className = 'row claude-profile-row';
+      const name = document.createElement('span');
+      name.textContent = profile.label;
+      name.title = profile.configDir;
+      const remove = document.createElement('button');
+      remove.className = 'small-btn';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', async () => {
+        settings = await window.tracker.removeSubscriptionProfile(provider, profile.id);
+        renderSubscriptionProfiles(provider, settings[`${provider}Profiles`] || []);
+        if (provider === 'claude') renderActiveClaudeSelect();
+        window.tracker.refresh();
+      });
+      row.append(name, remove);
+      if (provider === 'claude') {
+        const capture = document.createElement('button');
+        capture.className = 'small-btn';
+        capture.textContent = 'Enable capture';
+        capture.addEventListener('click', () => enableCapture(profile.id, capture));
+        row.insertBefore(capture, remove);
+      }
+      host.appendChild(row);
+    }
+  }
+
+  function renderActiveClaudeSelect() {
+    const select = document.getElementById('set-claude-active');
+    select.replaceChildren();
+    for (const profile of [{ id: 'claude', label: 'Claude' }, ...(settings.claudeProfiles || [])]) {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      option.textContent = profile.label;
+      select.appendChild(option);
+    }
+    select.value = settings.claudeActiveProfile || 'claude';
+  }
+
+  async function enableCapture(id, button) {
+    button.disabled = true;
+    try {
+      const result = await window.tracker.enableClaudeCapture(id);
+      showToast(result.ok ? 'Capture enabled. Use Claude Code to update usage.' : result.error);
+    } catch { showToast('Could not enable Claude capture'); }
+    finally { button.disabled = false; }
+  }
+  document.getElementById('btn-claude-capture').addEventListener('click', (e) => enableCapture('claude', e.currentTarget));
+
+  for (const provider of ['codex', 'claude']) {
+    document.getElementById(`btn-${provider}-profile-add`).addEventListener('click', async () => {
+      const result = await window.tracker.addSubscriptionProfile(provider);
+      if (result.ok) {
+        settings = result.settings;
+        renderSubscriptionProfiles(provider, settings[`${provider}Profiles`] || []);
+        if (provider === 'claude') renderActiveClaudeSelect();
+        window.tracker.refresh();
+      } else if (!result.canceled) {
+        showToast(result.error || `Could not add ${provider} profile`);
+      }
+    });
   }
 
   function patchFromUI() {
@@ -459,6 +569,7 @@
     for (const id of PROVIDER_IDS) providers[id] = document.getElementById(`set-prov-${id}`).checked;
     return window.tracker.saveSettings({
       providers,
+      claudeActiveProfile: document.getElementById('set-claude-active').value,
       intervalMinutes: Number(document.getElementById('set-interval').value),
       percentMode: document.getElementById('set-percentmode').value,
       clock24: document.getElementById('set-clock').value === '24',

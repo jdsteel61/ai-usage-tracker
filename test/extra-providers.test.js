@@ -144,3 +144,14 @@ test('openrouter: fetch queries /key then /credits only for paygo keys', async (
   assert.equal(snap.windows[0].usedPercent, 20);
   assert.equal(urls.length, 2);
 });
+
+test('openrouter: credits endpoint 429 reaches provider backoff', async () => {
+  const snap = await fetchOpenRouterQuotas({
+    getKey,
+    fetchImpl: async (url) => url.endsWith('/api/v1/key')
+      ? jsonRes({ data: { usage: 1, limit: 0 } })
+      : jsonRes({ error: 'rate limited' }, 429),
+  });
+  assert.equal(snap.ok, false);
+  assert.equal(snap.error.code, 'HTTP_429');
+});

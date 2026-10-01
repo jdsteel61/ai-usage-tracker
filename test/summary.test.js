@@ -64,6 +64,44 @@ test('summary: invalid input yields empty string', () => {
   assert.equal(buildUsageSummary({}), '');
 });
 
+test('summary: paused local account includes the reading age and expired resets', () => {
+  const text = buildUsageSummary(snap([{
+    title: 'Claude Work', ok: true, stale: true, fetchedAt: NOW - 95 * 60_000,
+    source: 'claude-statusline', error: { code: 'PAUSED' },
+    windows: { session: { label: '5 hr', usedPercent: 20, resetsAt: '2026-09-22T08:00:00Z' } },
+  }]), { now: NOW });
+  assert.match(text, /reset passed/);
+  assert.doesNotMatch(text, /\(resets /);
+  assert.match(text, /\[paused account; local Claude Code reading; reading 1h 35m old\]/);
+});
+
+test('summary: cached and unavailable cooldowns include the next retry', () => {
+  const retryAt = NOW + 30 * 60_000;
+  const text = buildUsageSummary(snap([
+    { title: 'Codex', ok: true, stale: true, fetchedAt: NOW - 12 * 60_000,
+      error: { code: 'RATE_LIMITED', retryAt }, windows: { weekly: { label: 'Week', usedPercent: 34, resetsAt: null } } },
+    { title: 'Z.ai', ok: false, error: { code: 'RATE_LIMITED', retryAt } },
+  ]), { now: NOW });
+  assert.ok(text.includes(`[stale; reading 12m old; cooldown; next retry ${t(retryAt)}]`));
+  assert.ok(text.includes(`Z.ai: unavailable (RATE_LIMITED) [cooldown; next retry ${t(retryAt)}]`));
+});
+
+test('summary: local fresh reading includes age without stale flag', () => {
+  const text = buildUsageSummary(snap([{
+    title: 'Claude', ok: true, fetchedAt: NOW - 30_000,
+    notes: ['From Claude Code status line'],
+    windows: { session: { label: '5 hr', usedPercent: 4, resetsAt: null } },
+  }]), { now: NOW });
+  assert.match(text, /\[local Claude Code reading; reading just now\]/);
+  assert.doesNotMatch(text, /stale/);
+});
+
+test('summary: paused without a reading does not invent an age', () => {
+  const text = buildUsageSummary(snap([{ title: 'Claude Work', ok: false, error: { code: 'PAUSED' } }]), { now: NOW });
+  assert.ok(text.includes('unavailable (PAUSED) [paused account]'));
+  assert.doesNotMatch(text, /reading|old/);
+});
+
 test('summary: resetLabel weekday boundary', () => {
   assert.equal(resetLabel('2026-09-22T10:00:00Z', NOW, true), t('2026-09-22T10:00:00Z')); // < 24h: time only
   assert.equal(resetLabel('2026-09-25T15:00:00Z', NOW, true), `Fri ${t('2026-09-25T15:00:00Z')}`); // >= 24h: weekday + time

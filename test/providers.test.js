@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { normalizeCodexResult, windowKindForDuration, resetToIso } = require('../src/main/providers/codex');
-const { normalizeClaudeUsage, readClaudeAuth } = require('../src/main/providers/claude');
+const { normalizeClaudeUsage, fetchClaudeQuotas } = require('../src/main/providers/claude');
 const { normalizeZaiQuota, limitPeriodSeconds } = require('../src/main/providers/zai');
 const { clampPercent, findWindow } = require('../src/main/providers/model');
 
@@ -121,39 +121,48 @@ test('codex: resolveCodexTarget prefers .exe, falls back to cmd.exe for unparsab
 
 // ---------------------------------------------------------------- Claude
 
-test('claude: normalizes five-hour, weekly, and scoped model windows', () => {
-  const snap = normalizeClaudeUsage(FIX('claude-usage.json'), { subscriptionType: 'max' });
+test('claude: reads status-line windows with their actual observation time', () => {
+  const now = Date.parse('2026-10-01T09:00:00Z');
+  const snap = normalizeClaudeUsage({ windows: {
+    five_hour: { usedPercent: 91, resetsAt: '2026-10-01T12:00:00Z', observedAt: now },
+    seven_day: { usedPercent: 58, resetsAt: '2026-10-05T12:00:00Z', observedAt: now },
+  } }, now);
   assert.equal(snap.ok, true);
-  assert.equal(snap.plan, 'max');
   const session = findWindow(snap, 'session');
   const weekly = findWindow(snap, 'weekly');
   assert.equal(session.usedPercent, 91);
-  assert.equal(session.resetsAt, '2026-09-21T18:30:00.000Z');
   assert.equal(weekly.usedPercent, 58);
-  const opus = snap.windows.find((w) => w.label === 'Opus');
-  assert.ok(opus, 'scoped model limit normalized');
-  assert.equal(opus.kind, 'other');
-  assert.equal(opus.usedPercent, 42);
+  assert.equal(snap.fetchedAt, now);
+  assert.equal(snap.stale, false);
 });
 
-test('claude: usage-based billing yields an explanatory note, no invented windows', () => {
-  const snap = normalizeClaudeUsage({}, { subscriptionType: null });
-  assert.equal(snap.windows.length, 0);
-  assert.ok(snap.notes.some((n) => /usage-based API billing/i.test(n)));
+test('claude: missing or malformed status-line data yields NO_DATA', () => {
+  assert.equal(normalizeClaudeUsage({}).error.code, 'NO_DATA');
+  assert.equal(normalizeClaudeUsage({ windows: { five_hour: { usedPercent: 'high' } } }).error.code, 'NO_DATA');
 });
 
-test('claude: malformed utilization values are rejected, not clamped from garbage', () => {
-  const snap = normalizeClaudeUsage({ five_hour: { utilization: 'high' }, seven_day: { utilization: null } }, {});
-  assert.equal(snap.windows.length, 0);
+test('claude: old local readings are stale and expired windows are excluded', () => {
+  const now = Date.now();
+  const windows = {
+    five_hour: { usedPercent: 25, observedAt: now - 20 * 60_000, resetsAt: new Date(now + 60_000).toISOString() },
+    seven_day: { usedPercent: 30, observedAt: now, resetsAt: new Date(now - 1000).toISOString() },
+  };
+  const snap = normalizeClaudeUsage({ windows }, now);
+  assert.equal(snap.stale, true);
+  assert.equal(snap.windows.length, 1);
+  assert.equal(snap.fetchedAt, windows.five_hour.observedAt);
 });
 
-test('claude: credential read handles absent and corrupt files without throwing', () => {
-  assert.equal(readClaudeAuth({ credentialsPath: path.join(__dirname, 'fixtures', 'definitely-absent.json') }), null);
-  const tmp = path.join(__dirname, 'tmp-corrupt.json');
-  fs.writeFileSync(tmp, '{not json');
-  const corrupt = readClaudeAuth({ credentialsPath: tmp });
-  assert.deepEqual(corrupt, { corrupt: true });
-  fs.unlinkSync(tmp);
+test('claude: adapter only reads local usage, never credentials or the network', async () => {
+  const snap = await fetchClaudeQuotas({
+    configDir: 'profile',
+    fetchImpl: () => { throw new Error('Network must not be used'); },
+    readFileSync: (filePath) => {
+      assert.equal(filePath, path.join('profile', 'ai-usage-tracker', 'usage.json'));
+      return '{}';
+    },
+  });
+  assert.equal(snap.error.code, 'NO_DATA');
 });
 
 // ---------------------------------------------------------------- Z.ai
