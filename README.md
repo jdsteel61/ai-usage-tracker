@@ -1,259 +1,217 @@
 # AI Usage Tracker
 
-A quiet Windows notification-area monitor for the **included quota usage** of
-OpenAI Codex, Claude Code, and Z.ai (GLM Coding Plan).
+A compact Windows tray app for **Codex, Claude Code, Z.ai, Grok, Gemini, and
+OpenRouter**, with separate cards for additional Codex and Claude subscription
+profiles. It shows quota percentages, credit budgets, or key health according to
+what each provider exposes. Percentages across providers are not directly
+comparable; missing numbers are never guessed.
 
-The headline numbers are **quota usage percentages**, not raw token counts:
-Codex and Claude subscription allowances are weighted by model, context,
-caching, reasoning, and tools, so raw tokens never map cleanly to a plan
-percentage. Z.ai exposes token-oriented Coding Plan quotas; every provider is
-normalized into clearly labelled windows (`5 hr` session, `Week`) without
-claiming the percentages are directly comparable across providers.
+Claude readings come from **local Claude Code status-line capture**. The tracker
+does not query Claude's OAuth usage endpoint or send prompts. Monitoring makes no
+model inference requests.
 
-```text
-┌──────────────────────────────┐
-│ AI USAGE                14:32│
-│ CODEX                        │
-│ 5 hr   ██████░░  72%     2h │
-│ Week   ███░░░░░  34%     4d │
-│ CLAUDE                    !  │
-│ 5 hr   ████████  91%    38m │
-│ Week   █████░░░  58%     2d │
-│ Z.AI                         │
-│ 5 hr   ██░░░░░░  24%     3h │
-│ Week   █░░░░░░░  12%     5d │
-└──────────────────────────────┘
+## Windows setup
+
+1. Download the Windows x64 ZIP from a
+   [published release](https://github.com/jdsteel61/ai-usage-tracker/releases),
+   when available. The
+   [Windows build workflow](https://github.com/jdsteel61/ai-usage-tracker/actions/workflows/windows-build.yml)
+   also provides downloadable build artifacts after a successful run; GitHub
+   requires sign-in to download Actions artifacts. Build automation prepares
+   downloads but does not publish releases automatically.
+2. Extract the **whole ZIP**, then run
+   `ai-usage-tracker-win32-x64\ai-usage-tracker.exe`. Keep the executable beside
+   its runtime files. No installer or administrator access is needed. Electron
+   includes Chromium; WebView2 is not required.
+3. Open **Menu > Settings**, enable the providers you use, and follow the
+   requirements below. Launch at Windows sign-in is optional and off by default.
+
+For Actions downloads, extract the `ai-usage-tracker-windows-x64` artifact first
+to get the portable ZIP and checksum, then extract the portable ZIP in step 2.
+
+Release assets use names such as `ai-usage-tracker-1.5.1-win32-x64.zip`, with a
+matching `.zip.sha256` file. To check a downloaded ZIP in PowerShell, compare the
+hash below with that file:
+
+```powershell
+Get-FileHash .\ai-usage-tracker-1.5.1-win32-x64.zip -Algorithm SHA256
 ```
 
-Screenshots of the final UI (synthetic demo data) are in `screenshots/`
-(`mini-100.png` at 100% scaling, `mini-150.png` at 150% scaling).
+A checksum detects a damaged or mismatched download; it is not code signing.
+These builds are unsigned, so Windows may show an unknown-publisher warning.
 
-## Why a new implementation (not a UsageDeck fork)
+Click the tray icon to show or hide the window. Closing the panel hides it;
+**Quit** exits the app. Drag the header to move it or an edge to resize it. Cards
+scale to fit. The header copy button copies a plain-text summary, including
+reading freshness, for pasting elsewhere.
 
-`BUILD_PROMPT.md` names UsageDeck (Tauri/Rust, MIT) as the default
-foundation. Inspection confirmed it is excellent, but this machine has no
-Rust toolchain and no MSVC Build Tools, which a Tauri Windows build requires
-(rustup + VS Build Tools is a multi-gigabyte install). Node.js 20 was
-available, so the app is a fresh Electron implementation whose **provider
-interface and normalization follow UsageDeck's model** and whose **Codex
-app-server handshake follows agent-usage-widget's** proven approach. Both are
-MIT-licensed and credited in `THIRD_PARTY_NOTICES.md`.
+### Connect your providers
 
-## Installation
-
-Two ways to run:
-
-**Packaged build (recommended)**
-
-```text
-dist\ai-usage-tracker-win32-x64\ai-usage-tracker.exe
-```
-
-(v1.0.2 - includes the settings-panel freeze fix, Windows Codex-CLI spawn
-fix, and Z.ai credit-plan support; see FINAL_REPORT.md)
-
-Double-click the exe. No installer, no admin rights, nothing is registered
-anywhere. To "uninstall", delete the folder. (Requires the WebView2/Edge
-runtime present on current Windows 10/11 - see Troubleshooting.)
-
-**From source**
-
-```bash
-npm install
-npm start          # runs from source
-```
-
-First launch shows the compact frameless 300x216 window (no title/menu
-bars; the header line doubles as the drag region with a dropdown menu,
-refresh, and hide buttons, plus a clock with a time-since-update counter).
-It is resizable and remembers position and size; clicking the tray icon
-shows/hides it; the tray menu and the header dropdown both offer Refresh,
-Always-on-top, Launch-at-login, Settings, and Quit.
-
-**Zoom-to-fit:** the whole UI scales so every enabled provider stays
-visible. Enabling more providers squeezes them into the window; dragging
-the window larger scales everything up (0.5x - 1.8x).
-
-**Copy for agents:** the header button (between the clock and
-refresh) copies a compact plain-text usage summary to the clipboard -
-per-provider windows, percentages, reset times, and peak/off-peak state
-where a provider has one - ready to paste into an agent prompt for routing
-decisions.
-
-Successful readings for every provider and profile are saved locally and restored
-as stale after restarting. Copied summaries include reading age, local Claude
-capture, paused accounts, and rate-limit retry times. The selected Claude account's
-capture file is watched, so normal Claude Code usage updates its card within about
-a second without refreshing other providers. Account switching reads only local data.
-Provider endpoint settings stay isolated; poll timeouts cancel the underlying
-HTTP request or CLI process before retrying.
-
-**Peak/off-peak:** providers with a published peak schedule show a badge
-on their card. Currently Z.ai (GLM Coding Plan): peak hours are Mon-Fri
-14:00-18:00 Beijing time (UTC+8) and off-peak calls cost 50% of the base
-credit cost; the badge shows which mode is active and when it flips. The
-Claude usage API does not expose peak state, so no badge is shown there
-rather than guessing.
-
-## What each provider needs
-
-Included-quota agents (auto-discovered, no key needed):
-
-- **Codex** (OpenAI) - weekly usage via the Codex CLI app-server
-- **Claude** (Anthropic) - 5-hour + weekly limits captured from Claude Code's status line
-- **Z.ai** (GLM Coding Plan) - session + weekly quota from a key you store
-  (key lives only in Windows Credential Manager)
-
-API-key providers (off by default; enable + store a key in Settings):
-
-- **OpenRouter** - credit budget (or prepaid balance) from `api/v1/key` +
-  `api/v1/credits`; metadata-only calls
-- **Grok (xAI)** - validates the key against `api.x.ai/v1/api-key` and maps
-  credit/usage fields if your account exposes them (xAI publishes no usage
-  API; the card says so honestly when nothing is available)
-- **Gemini (Google AI Studio)** - validates the key against the free
-  `models` metadata endpoint and shows documented free-tier limits
-  (Google exposes no usage/quota API for these keys)
-
-All monitoring is metadata-only; the app never sends inference requests.
-
-| Provider | Requirement | How it is read |
+| Provider | Setup | What the tracker reads |
 |---|---|---|
-| Codex | Codex CLI installed and signed in (`codex` on PATH) | Spawns `codex app-server` and calls the metadata-only `account/rateLimits/read` method. The CLI handles its own credentials; we never read or write the Codex auth file. |
-| Claude | Claude Code v2.1.251+ and Node.js on PATH | Reads a local cache written from Claude Code's documented status-line JSON. No credential reads, usage-endpoint requests, or model calls. Enable local capture in Settings for each profile. |
-| Z.ai | GLM Coding Plan API key | You add the key in Settings; it is stored in **Windows Credential Manager** only. Polled via `GET https://api.z.ai/api/monitor/usage/quota/limit` (base URL configurable). |
+| Codex | Install the Codex CLI, sign in yourself, and make `codex` available on PATH. | Starts `codex app-server` and requests `account/rateLimits/read`. The CLI manages its authentication; the tracker does not read the Codex auth file. |
+| Claude | Use Claude Code with status-line `rate_limits` support and Node.js on PATH. In Settings, choose **Enable local capture** for each account you want to capture. | Reads the local usage file written by the status-line collector. Usage may appear only after a Claude Code response, and some sessions/accounts omit these fields. |
+| Z.ai | Add a GLM Coding Plan API key in Settings. | `GET https://api.z.ai/api/monitor/usage/quota/limit`; only Z.ai uses the configurable Z.ai base URL. |
+| Grok | Enable it and add an xAI API key in Settings. | `GET https://api.x.ai/v1/api-key`; shows reported credit fields when available, otherwise key health and a note that usage data is unavailable. |
+| Gemini | Enable it and add a Google AI Studio API key in Settings. | `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1`; validates the key. This adapter does not measure actual Gemini usage. |
+| OpenRouter | Enable it and add an OpenRouter API key in Settings. | `GET https://openrouter.ai/api/v1/key`, plus `/api/v1/credits` when needed for prepaid balances. Credit budgets do not have a reset countdown. |
 
-Additional **Codex CLI** or **Claude Code** accounts can be added in **Settings → [provider] profiles → Add profile…**. Select a signed-in Codex home folder or Claude Code config folder (such as `.claude-work`). Each profile gets its own card and history. The normal provider checkbox controls all profiles of that provider. The front-page **Watching** selector chooses which Claude account's local usage is displayed actively; other cards retain their last reading and its age. Folder paths are stored in local settings; Codex authentication stays managed by the Codex CLI.
+Codex, Claude, and Z.ai are enabled by default; the other providers are optional.
+All four API keys are stored in Windows Credential Manager. Storing, testing,
+and removing a key each require confirmation in the app. Enabled providers read
+their stored keys for normal monitoring.
 
-For Claude, click **Enable local capture** (or **Enable capture** for an additional profile). The installer wraps the current status-line command and preserves its output and options. The previous status-line setting is saved in `<config folder>/ai-usage-tracker/original-statusline.json`; restore that field in Claude's `settings.json` to undo setup. The collector needs `node` on PATH and writes only usage percentages, reset times, and observation times to `ai-usage-tracker/usage.json`. It never saves the full status-line payload. Usage fields may be absent until Claude Code receives its first response, or for some accounts/sessions. Missing fields retain previous readings; readings older than 15 minutes are marked stale and expired windows are excluded. The tracker reads these files on its normal refresh interval, including manual refresh.
+In Settings, use **Add profile** to choose another signed-in Codex home folder or
+Claude Code config folder. Each gets its own card, saved reading, and history.
+The provider checkbox controls all of that provider's profiles.
 
-Missing window? The card shows `—` with a tooltip explaining that the
-provider does not expose that window. Signed out / no key / no plan states
-are reported as text, never as invented numbers. API-key-style Codex plans
-and usage-based Claude billing produce explicit notes.
+Only **one Claude profile is actively watched**. Use the small linked switches on
+Claude cards or **Active Claude account** in Settings to choose it. Switching
+reads local data and does not refresh network providers. Other Claude cards show
+their last saved reading. Pausing a card does not disable its Claude Code
+collector; see [Undo Claude capture](#undo-claude-capture).
 
-## Features
+## Understand reading freshness
 
-- Three provider cards: session (5-hour) and weekly quota windows, percentage,
-  progress bar, and reset countdown; tooltips show the exact reset clock time.
-- Spike detection: `!` beside a provider when usage rises >= 8 points in one
-  polling interval, or >= 3 points at more than 4x the window's 24-hour median
-  rate (all configurable). Resets, provider recovery, long gaps, and first
-  samples never trigger. The `!` explains itself on hover/click, e.g.
-  `Claude 5h increased 11% between 14:25 and 14:30`, and clears after 30 min
-  (configurable).
-- Manual refresh (debounced) + background polling every 5 minutes (min 1) with
-  modest jitter, per-provider timeouts and a single bounded retry. HTTP 429
-  responses pause that provider for 15, 30, 60, then up to 120 minutes;
-  manual refresh respects the pause.
-- Failed providers keep their last good values, visibly marked
-  `stale · 12m old`; one provider failing never blanks the others.
-- Settings: enable/disable providers, interval, used-vs-remaining percent,
-  always-on-top, launch at Windows sign-in (off by default - the app never
-  adds startup entries silently), light/dark/system theme, 12/24-hour clocks,
-  spike thresholds, Z.ai key management, window remembers position and size.
-- Single-instance: a second launch just reveals the running window.
+Each card has a small status dot and a text label. Hover the status to see the
+source, reading age, and any error or retry detail.
 
-## Privacy & security
+| Label | Meaning |
+|---|---|
+| **Current** | A recent successful provider reading, or recent local Claude capture. It is a point-in-time observation. |
+| **Cached** | The last successful reading is retained after a failed request, restart, or an age limit. Its age tells you how old the numbers are. |
+| **Paused** | This Claude profile is not actively watched. Any displayed numbers are its saved reading. |
+| **Waiting** | There is no successful reading to show yet. Hover for the reason, such as missing capture, CLI, authentication, or API key. |
 
-- **No telemetry, no analytics, no backend, no update checks.** The app talks
-  only to enabled providers' metadata endpoints. Claude monitoring uses local files.
-- The Z.ai key lives exclusively in Windows Credential Manager; storing,
-  testing, or removing it always asks for confirmation first. It is never
-  written to settings files, logs, source, or a `.env`.
-- Claude credentials are never read or written. Codex credentials are never
-  touched at all - the CLI handles its own auth.
-- Local history stores only normalized percentages, reset timestamps, provider
-  state, and sample times - no prompts, responses, paths, or raw payloads.
-- All diagnostics pass a redaction filter (bearer tokens, API keys, credential
-  fields, long blobs, user profile paths). Logs live under
-  `%APPDATA%\ai-usage-tracker\logs\`.
-- No network listener is opened. The renderer is sandboxed with context
-  isolation, no node integration, and a strict CSP.
-- No paid model inference request is ever made for monitoring.
+Claude readings become cached after 15 minutes without a new observation;
+network readings become cached after two configured polling intervals. Reset
+countdowns reaching zero do not prove usage is zero: the card needs a new
+reading. The header reports the last **panel update**, which can happen without
+a successful provider reading. A provider in rate-limit cooldown shows cached
+values, or waiting if it has none; hover for the next retry time.
 
-## Architecture
+Successful readings survive restarts. A provider failure does not blank other
+cards. Background polling defaults to five minutes, with jitter, timeouts,
+cancellation, and bounded retries. HTTP 429 responses pause that provider for
+15, 30, 60, then up to 120 minutes; manual refresh respects the pause. The active
+Claude file is also watched, so capture changes normally appear within about a
+second.
 
-```text
-src/main/
-  main.js            Electron lifecycle: tray, window, IPC, screenshots
-  preload.js         context-bridged renderer API (tiny surface)
-  providers/
-    model.js         normalized window model (session/weekly/other) + clamps
-    codex.js         Codex CLI app-server JSON-RPC adapter
-    claude.js        Claude Code local status-line usage adapter
-    zai.js           Z.ai Coding Plan quota adapter
-    index.js         orchestrator: isolated polls, timeout, 1 retry,
-                     cache merge with stale marking
-  settings.js        secret-free JSON settings (rejects secret-shaped keys)
-  credentials.js     Windows Credential Manager bridge (stdin/stdout only)
-  credmgr.ps1        P/Invoke CredRead/CredWrite/CredDelete helper
-  scheduler.js       jittered interval loop, debounced manual refresh,
-                     generation-based cancellation
-  spikes.js          spike rules (absolute + relative), alert bookkeeping
-  history.js         normalized sample store (48h, capped)
-  format.js          countdown / clock / age formatting (DST-correct via Intl)
-  logger.js          redacting logger
-  windowState.js     bounds persistence + work-area clamping
-  icon.js            programmatic tray gauge PNG
-src/renderer/        plain HTML/CSS/JS panel + settings overlay
-test/                74 unit/fixture tests (node:test) + synthetic fixtures
+The `!` marker reports a detected usage jump; hover or click it for the interval
+and increase. Thresholds are configurable. Published peak/off-peak timing is
+shown for Z.ai. Missing windows use a dash with an explanation.
+
+## What is read and stored
+
+There is no telemetry, analytics, application backend, update checker, or
+network listener. Network monitoring goes to the enabled providers listed
+above; Codex's CLI makes its own authenticated metadata request. The renderer
+uses sandboxing, context isolation, no Node integration, and a restrictive CSP.
+
+| Location | Contents |
+|---|---|
+| `%APPDATA%\ai-usage-tracker\settings.json` | Display/polling settings, profile labels and folder paths, active Claude profile, and window bounds. No API keys. |
+| `%APPDATA%\ai-usage-tracker\readings.json` | Last successful normalized readings: provider/window identifiers, plan label, percentages, reset/observation times, and selected numeric quota fields. No raw responses or arbitrary error text. Older installs may also have `claude-readings.json`. |
+| `%APPDATA%\ai-usage-tracker\history.json` | Normalized session/weekly percentages, reset times, sample times, and success/error state. Pruned to 48 hours and capped in size. |
+| `%APPDATA%\ai-usage-tracker\logs\main.log` | Diagnostics passed through a redaction filter for tokens, keys, credential fields, long blobs, and user profile paths; rotated around 512 KB. |
+| Windows Credential Manager | API keys under `ai-usage-tracker:zai-api-key`, `ai-usage-tracker:grok-api-key`, `ai-usage-tracker:gemini-api-key`, and `ai-usage-tracker:openrouter-api-key`. |
+| `<Claude config folder>\ai-usage-tracker\usage.json` | Only five-hour/seven-day percentages, reset times, and observation times captured from Claude Code. |
+| `<Claude config folder>\ai-usage-tracker\` setup files | `original-statusline.json` backs up the previous status-line setting; `capture-state.json` records the installed wrapper and prior field presence; `forward.json` records its command and shell; `collector.cjs` and `claudeStatusline.js` run local capture. |
+
+Claude capture reads and updates that profile's `settings.json` to wrap its
+`statusLine` command. It preserves other settings and forwards the original
+stdin and output to an existing status-line command. The collector receives
+Claude Code's status-line JSON in memory but saves only the usage fields above;
+it does not open transcripts or persist the full payload. It does not read
+Claude's authentication file. Existing status-line commands continue to have
+their own behavior.
+
+### Undo Claude capture
+
+In Settings, choose **Undo capture** for the relevant Claude profile.
+Confirm the config folder shown in the dialog. This restores its backed-up
+`statusLine` setting, or removes the field if it was
+originally absent. Other Claude settings are preserved. If you have changed the
+status-line setting since enabling capture, or the backup is missing or damaged,
+the app refuses to overwrite it.
+
+For manual recovery, quit the tracker and edit that profile's `settings.json`:
+replace **only** `statusLine` with the JSON value in
+`ai-usage-tracker\original-statusline.json`. If the backup is `null`, remove the
+`statusLine` field unless `capture-state.json` records `hadStatusLine: true`;
+in that case, restore the field to `null`. Keep the rest of `settings.json`
+intact. Do not replace the
+whole settings file with this backup. Start a new Claude Code session if an
+existing session continues to use the old command.
+
+Undo leaves the helper files and saved readings in place. Once the
+status-line wrapper has been removed, you can delete that profile's
+`ai-usage-tracker` subfolder to remove its capture data. Removing a profile from
+the tracker, disabling Claude, or quitting the tracker does not undo capture.
+
+### Remove the app and its data
+
+1. Undo capture for every Claude profile where you enabled it.
+2. Turn off **Launch at sign-in** and remove stored API keys in Settings if you
+   want to remove those too.
+3. **Quit** the app, then delete the extracted app folder.
+4. Optionally delete `%APPDATA%\ai-usage-tracker` and the restored Claude
+   profiles' `ai-usage-tracker` subfolders to erase local tracker data.
+
+Deleting the app folder alone keeps settings, readings, keys, and Claude capture
+for a later reinstall. If the app is already gone, remove its key entries in
+Windows Credential Manager and use the manual capture recovery above.
+
+## Build and run from source
+
+Use Node.js 20+ and npm. From the repository folder:
+
+```powershell
+npm ci
+npm test
+npm run lint
+npm start
+npm run package         # fresh Windows x64 app folder
+npm run package:release # app folder, portable ZIP, and SHA256 file
 ```
 
-## Development
+Fresh build output is placed under a unique `dist\releases\<version>-<suffix>`
+folder; the build command prints its exact path. It does not overwrite the
+running `dist-ui` build. The GitHub workflow performs tests and lint before
+packaging and uploads artifacts for tag pushes (`v*`) or manual workflow runs.
+Publishing a GitHub release is a separate action.
 
-```bash
-npm install
-npm test        # unit + fixture tests + lint gate (74 tests)
-npm run lint    # eslint only
-npm audit       # dependency audit
-npm start       # run from source
-npm run package # build dist\ai-usage-tracker-win32-x64\ai-usage-tracker.exe
+Demo mode uses synthetic fixtures and does not access accounts or the network:
+
+```powershell
+$env:AITRACKER_DEMO = '1'
+npm start
+# Optional: npm run screenshot
+Remove-Item Env:AITRACKER_DEMO
 ```
 
-Demo mode (synthetic fixtures, no accounts, no network):
+The implementation is plain Electron/JavaScript: `src/main/providers/` contains
+provider adapters; `claudeStatusline.js` handles capture setup and restoration;
+`readingCache.js` and `history.js` persist normalized data; `snapshotView.js`
+shapes freshness; `src/renderer/` contains the compact panel and Settings. Tests
+use fixtures and injected transports rather than live accounts. Third-party
+credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-```bash
-AITRACKER_DEMO=1 npx electron .            # bash
-set AITRACKER_DEMO=1 && npx electron .     # cmd
-```
+## Troubleshooting and limits
 
-Screenshot mode (demo data, captures `screenshots/mini-100.png` and
-`mini-150.png`, then exits):
-
-```bash
-AITRACKER_DEMO=1 npx electron . --screenshot
-```
-
-## Troubleshooting
-
-- **Codex card says "Codex CLI not found"** - ensure `codex --version` works
-  in a normal terminal (the CLI must be on PATH). Signed-out CLI shows a
-  sign-in message; run `codex login` yourself, we never touch its auth.
-- **Claude card says "Enable local capture" / "NO_DATA"** - enable capture for
-  that profile in Settings, then use Claude Code normally and refresh the tracker.
-  Subscription fields are provided after a response and can be absent. Check
-  Claude Code's `/usage` display if fields remain missing. API-key billing does
-  not provide subscription usage percentages. A project or managed status-line
-  override, `disableAllHooks`, or `allowManagedHooksOnly` can prevent capture.
-- **Z.ai card says "No Z.ai API key stored"** - add the key in Settings
-  (it goes to Windows Credential Manager). "Key rejected (401/403)" means the
-  key is wrong or lacks a Coding Plan; `npm`-style proxies are not used.
-- **All cards stale** - check network; the app keeps showing cached values
-  with their age until a poll succeeds.
-- **Window opens off-screen** - bounds are clamped to the current work area;
-  delete `%APPDATA%\ai-usage-tracker\settings.json` to reset everything.
-- **Exe won't start on a stripped-down Windows** - Electron needs the
-  WebView2/Edge runtime, present by default on current Windows 10/11.
-
-## Known limitations
-
-- Percentages across providers are not comparable (different weighting).
-- Claude model-specific weekly limits are normalized but shown only in notes;
-  Mini mode renders session + weekly rows by design.
-- Z.ai web-search limits are tracked but not rendered as a row.
-- The packaged exe uses Electron's default icon (a custom .ico is a
-  packaging nicety, not functional).
-- Real-account behavior of all three endpoints was verified against
-  published open-source clients and synthetic fixtures; it was not exercised
-  against live accounts in this environment (see FINAL_REPORT.md).
+- **Codex CLI not found:** confirm `codex --version` works in a normal terminal,
+  then restart the tracker after changing PATH. Sign in using the CLI yourself.
+- **Claude waiting:** enable capture for the correct config folder and use
+  Claude Code normally. Missing subscription fields cannot be forced by
+  refreshing the tracker. Project/managed status-line overrides, disabled hooks,
+  or API-key billing can prevent a reading.
+- **Cached values:** inspect the status hover for reading age, error, and retry
+  time. Refresh cannot bypass a provider's rate-limit pause.
+- **Key valid without percentages:** Gemini measures key health only; Grok
+  usage depends on fields returned by xAI. Consult the provider's own dashboard.
+- **Missing quota rows:** the compact panel renders session and weekly/credit
+  rows. Additional normalized windows, such as Z.ai web-search limits, are not
+  shown as separate rows.
+- **Testing scope:** automated verification uses synthetic fixtures. Provider
+  schemas and Claude Code status-line availability can change; live-account
+  behavior must be checked separately with your authorization.

@@ -7,7 +7,7 @@
  * windows, living in the notification area. See README.md for architecture.
  */
 const path = require('path');
-const { installCapture, usagePath } = require('./claudeStatusline');
+const { installCapture, restoreCapture, usagePath } = require('./claudeStatusline');
 const { watchClaudeUsage } = require('./claudeWatcher');
 const { fetchClaudeQuotas } = require('./providers/claude');
 const { loadReadings, saveReadings } = require('./readingCache');
@@ -413,6 +413,7 @@ function updateTrayFromSnapshot(snapshot) {
 // ---------------------------------------------------------------- login item
 
 function applyLoginItemSettings() {
+  if (IS_DEMO) return;
   const enabled = !!settings.get().launchAtLogin;
   try {
     app.setLoginItemSettings({ openAtLogin: enabled, name: 'AI Usage Tracker' });
@@ -505,14 +506,39 @@ function registerIpc() {
     return { ...next };
   });
 
-  ipcMain.handle('claude:enableCapture', (_e, id) => {
+  ipcMain.handle('claude:enableCapture', async (_e, id) => {
+    if (IS_DEMO) return { ok: false, error: 'Claude capture is disabled in demo mode' };
     const profile = settings.get().claudeProfiles.find((p) => p.id === id);
     const configDir = id === 'claude' ? path.join(os.homedir(), '.claude') : profile && profile.configDir;
     if (!configDir) return { ok: false, error: 'Unknown Claude profile' };
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: 'question', buttons: ['Cancel', 'Enable capture'], defaultId: 0, cancelId: 0,
+      message: 'Enable local Claude capture?',
+      detail: `Claude config folder: ${configDir}\n\nThis wraps the statusLine command in settings.json and backs up the previous field in ai-usage-tracker/original-statusline.json. Its existing display receives the same input and keeps working. The tracker saves only usage percentages, reset times, and observation times locally. It does not read Claude credentials, send prompts, or query the OAuth usage endpoint. Node.js must be on PATH. Undo capture in Settings restores the previous field.`,
+    });
+    if (confirmation.response !== 1) return { ok: false, canceled: true };
     try {
       const result = installCapture(configDir);
       configureClaudeWatcher();
       return result;
+    } catch (cause) {
+      return { ok: false, error: cause.message };
+    }
+  });
+
+  ipcMain.handle('claude:restoreCapture', async (_e, id) => {
+    if (IS_DEMO) return { ok: false, error: 'Claude capture is disabled in demo mode' };
+    const profile = settings.get().claudeProfiles.find((p) => p.id === id);
+    const configDir = id === 'claude' ? path.join(os.homedir(), '.claude') : profile && profile.configDir;
+    if (!configDir) return { ok: false, error: 'Unknown Claude profile' };
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: 'question', buttons: ['Cancel', 'Undo capture'], defaultId: 0, cancelId: 0,
+      message: 'Undo local Claude capture?',
+      detail: `Claude config folder: ${configDir}\n\nThis restores only the previous statusLine field in settings.json from ai-usage-tracker/original-statusline.json, or removes the field if it was originally absent. If the status line has changed, nothing is overwritten. Other Claude settings, cached usage, and helper files are kept. Removing a profile or quitting the tracker does not undo capture.`,
+    });
+    if (confirmation.response !== 1) return { ok: false, canceled: true };
+    try {
+      return restoreCapture(configDir);
     } catch (cause) {
       return { ok: false, error: cause.message };
     }
@@ -549,6 +575,7 @@ function registerIpc() {
   })).response === 1;
 
   async function providerKeyExists(id) {
+    if (IS_DEMO) return false;
     if (!keyTarget(id)) return null;
     try { return await credentials.secretExists({ target: keyTarget(id) }); } catch (cause) {
       log.error('credmgr', `exists check failed: ${cause.message}`);
@@ -556,6 +583,7 @@ function registerIpc() {
     }
   }
   async function providerSaveKey(id, key) {
+    if (IS_DEMO) return { ok: false, error: 'API key actions are disabled in demo mode' };
     const label = KEY_LABELS[id];
     if (!label || !keyTarget(id)) return { ok: false, error: 'Unknown provider' };
     if (typeof key !== 'string' || key.trim().length < 8) return { ok: false, error: 'Key looks too short' };
@@ -571,6 +599,7 @@ function registerIpc() {
     }
   }
   async function providerTestKey(id) {
+    if (IS_DEMO) return { ok: false, error: 'API key actions are disabled in demo mode' };
     const label = KEY_LABELS[id];
     if (!label || !keyTarget(id)) return { ok: false, error: 'Unknown provider' };
     if (!(await confirm('Test', label))) return { ok: false, error: 'Cancelled' };
@@ -587,6 +616,7 @@ function registerIpc() {
       : { ok: false, error: `${snap.error.code}: ${snap.error.message}` };
   }
   async function providerRemoveKey(id) {
+    if (IS_DEMO) return { ok: false, error: 'API key actions are disabled in demo mode' };
     const label = KEY_LABELS[id];
     if (!label || !keyTarget(id)) return { ok: false, error: 'Unknown provider' };
     if (!(await confirm('Remove', label))) return { ok: false, error: 'Cancelled' };
@@ -704,6 +734,19 @@ async function runSettingsSelftest() {
         await new Promise((r) => setTimeout(r, 1500));
         copyRestored = btnCopy.textContent === icon0 && btnCopy.title.includes('Copy');
       } catch { copyOk = false; }
+      const switches = [...document.querySelectorAll('.claude-toggle')];
+      let accountSwitchOk = true;
+      if (switches.length > 1) {
+        const original = switches.findIndex((button) => button.getAttribute('aria-checked') === 'true');
+        switches.find((button) => button.getAttribute('aria-checked') === 'false').click();
+        await new Promise((r) => setTimeout(r, 300));
+        const changed = [...document.querySelectorAll('.claude-toggle')];
+        accountSwitchOk = changed.filter((button) => button.getAttribute('aria-checked') === 'true').length === 1
+          && changed[original].getAttribute('aria-checked') === 'false'
+          && changed[original].closest('.card').dataset.readingState === 'paused';
+        changed[original].click();
+        await new Promise((r) => setTimeout(r, 300));
+      }
       return {
         waited,
         menuOpened,
@@ -736,6 +779,24 @@ async function runSettingsSelftest() {
         copyTwiceOk,
         menuCopyOk,
         toastPresent: !!document.getElementById('toast'),
+        freshnessVisible: [...document.querySelectorAll('.card')].every((card) => {
+          const status = card.querySelector('.reading-status');
+          return status && ['current', 'cached', 'paused', 'waiting'].includes(status.textContent)
+            && status.getAttribute('data-tip').includes('Source:');
+        }),
+        freshnessHover: (() => {
+          const status = document.querySelector('.reading-status.current');
+          if (!status) return false;
+          status.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          const tip = document.getElementById('tooltip');
+          return tip.classList.contains('show') && tip.textContent.includes('Reading age:');
+        })(),
+        switchesStayQuiet: [...document.querySelectorAll('.claude-toggle')].every((button) =>
+          !button.hasAttribute('title') && !button.hasAttribute('data-tip')),
+        captureUndoVisible: !!document.getElementById('btn-claude-restore'),
+        accountSwitchOk,
+        readingStates: [...document.querySelectorAll('.card')].map((card) =>
+          card.dataset.providerId + ':' + card.dataset.readingState),
       };
     })()`;
   try {
@@ -743,7 +804,9 @@ async function runSettingsSelftest() {
     log.info('selftest', JSON.stringify(result));
     const ok = result.waited && result.menuOpened && result.opened && result.closedAfterDone
       && result.displayAfterDone === 'none' && result.copyOk && result.copyRestored
-      && result.copyTwiceOk && result.menuCopyOk && result.toastPresent && result.peakBadge;
+      && result.copyTwiceOk && result.menuCopyOk && result.toastPresent && result.peakBadge
+      && result.freshnessVisible && result.freshnessHover && result.switchesStayQuiet && result.captureUndoVisible
+      && result.accountSwitchOk;
     log.info('selftest', ok ? 'PASS' : 'FAIL');
     app.exit(ok ? 0 : 1);
   } catch (cause) {

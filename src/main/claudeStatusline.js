@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { isDeepStrictEqual } = require('util');
 
 function usagePath(configDir = path.join(os.homedir(), '.claude')) {
   return path.join(configDir, 'ai-usage-tracker', 'usage.json');
@@ -57,6 +58,7 @@ function installCapture(configDir) {
   const dir = path.dirname(usagePath(configDir));
   const runnerPath = path.join(dir, 'collector.cjs');
   const command = `node "${runnerPath.replace(/\\/g, '/')}" "${configDir.replace(/\\/g, '/')}"`;
+  const installedStatusLine = { ...(settings.statusLine || {}), type: 'command', command };
   fs.mkdirSync(dir, { recursive: true });
   if (!settings.statusLine || settings.statusLine.command !== command) {
     if (settings.statusLine && settings.statusLine.type !== 'command') throw new Error('Unsupported Claude status-line type');
@@ -64,14 +66,61 @@ function installCapture(configDir) {
     fs.writeFileSync(path.join(dir, 'forward.json'), JSON.stringify({
       command: settings.statusLine && settings.statusLine.command || null, shell: statuslineShell(),
     }), 'utf8');
+    fs.writeFileSync(path.join(dir, 'capture-state.json'), JSON.stringify({
+      version: 1, hadStatusLine: Object.hasOwn(settings, 'statusLine'), installedStatusLine,
+    }, null, 2), 'utf8');
   }
   fs.copyFileSync(path.join(__dirname, 'claudeStatusline.js'), path.join(dir, 'claudeStatusline.js'));
   fs.copyFileSync(path.join(__dirname, 'claude-statusline.cjs'), runnerPath);
-  settings.statusLine = { ...(settings.statusLine || {}), type: 'command', command };
+  settings.statusLine = installedStatusLine;
   const temp = `${settingsPath}.ai-usage-tracker.tmp`;
   fs.writeFileSync(temp, JSON.stringify(settings, null, 2), 'utf8');
   fs.renameSync(temp, settingsPath);
   return { ok: true };
 }
 
-module.exports = { captureUsage, usagePath, installCapture };
+/** Restore only our unchanged wrapper; retain cached readings and helper files. */
+function restoreCapture(configDir) {
+  const settingsPath = path.join(configDir, 'settings.json');
+  let settings = {};
+  try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); }
+  catch (cause) { if (cause.code !== 'ENOENT') throw new Error('Claude settings must contain valid JSON'); }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Invalid Claude settings');
+  const dir = path.dirname(usagePath(configDir));
+  const command = `node "${path.join(dir, 'collector.cjs').replace(/\\/g, '/')}" "${configDir.replace(/\\/g, '/')}"`;
+  let original;
+  try { original = JSON.parse(fs.readFileSync(path.join(dir, 'original-statusline.json'), 'utf8')); }
+  catch (cause) {
+    if (cause.code === 'ENOENT' && settings.statusLine?.command !== command) return { ok: true, alreadyDisabled: true };
+    throw new Error('Cannot restore capture: the original status-line backup is missing or invalid. Review Claude settings manually.');
+  }
+  if (original !== null && (typeof original !== 'object' || Array.isArray(original) || original.type !== 'command')) {
+    throw new Error('Cannot restore capture: the original status-line backup is invalid. Review Claude settings manually.');
+  }
+  let state = { hadStatusLine: original !== null,
+    installedStatusLine: { ...(original || {}), type: 'command', command } };
+  try {
+    state = JSON.parse(fs.readFileSync(path.join(dir, 'capture-state.json'), 'utf8'));
+    if (state?.version !== 1 || typeof state.hadStatusLine !== 'boolean'
+        || state.installedStatusLine?.type !== 'command' || state.installedStatusLine.command !== command) {
+      throw new Error('Invalid capture state');
+    }
+  } catch (cause) {
+    if (cause.code !== 'ENOENT') throw new Error('Cannot restore capture: saved installation details are invalid. Review Claude settings manually.');
+  }
+  const hasStatusLine = Object.hasOwn(settings, 'statusLine');
+  if (hasStatusLine === state.hadStatusLine && (!hasStatusLine || isDeepStrictEqual(settings.statusLine, original))) {
+    return { ok: true, alreadyDisabled: true };
+  }
+  if (!isDeepStrictEqual(settings.statusLine, state.installedStatusLine)) {
+    throw new Error('Claude status line changed since capture was enabled. Nothing was changed; review settings.json and original-statusline.json manually.');
+  }
+  if (state.hadStatusLine) settings.statusLine = original;
+  else delete settings.statusLine;
+  const temp = `${settingsPath}.ai-usage-tracker.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(settings, null, 2), 'utf8');
+  fs.renameSync(temp, settingsPath);
+  return { ok: true, alreadyDisabled: false };
+}
+
+module.exports = { captureUsage, usagePath, installCapture, restoreCapture };

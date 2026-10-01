@@ -42,8 +42,8 @@ test('shapeSnapshot: failing provider without windows array does not throw', () 
   assert.equal(claude.windows.weekly.usedPercent, 5);
 });
 
-test('shapeSnapshot: undefined (disabled) providers get DISABLED view', () => {
-  const view = shapeSnapshot({ claude: okSnap('claude') }, { settings: { ...DEFAULTS }, activeAlerts: {}, now: NOW });
+test('shapeSnapshot: undefined disabled providers get DISABLED view', () => {
+  const view = shapeSnapshot({ claude: okSnap('claude') }, { settings: { ...DEFAULTS, providers: { ...DEFAULTS.providers, codex: false } }, activeAlerts: {}, now: NOW });
   const codex = view.providers.find((p) => p.id === 'codex');
   assert.equal(codex.ok, false);
   assert.equal(codex.error.code, 'DISABLED');
@@ -109,6 +109,14 @@ test('shapeSnapshot: empty merged map never throws (fresh boot, settings patch)'
   const view = shapeSnapshot({}, { settings: { ...DEFAULTS }, activeAlerts: {}, now: NOW });
   assert.equal(view.providers.length, 6);
   assert.ok(view.providers.every((p) => p.ok === false));
+  assert.equal(view.providers.find((p) => p.id === 'codex').error.code, 'WAITING');
+});
+
+test('shapeSnapshot: inactive account without a successful reading is paused even after an error', () => {
+  const profile = { id: 'claude-profile-work', label: 'Work', configDir: 'C:\\claude-work' };
+  const view = shapeSnapshot({ [profile.id]: { ok: false, error: { code: 'NO_DATA' } } },
+    { settings: { ...DEFAULTS, claudeProfiles: [profile] }, now: NOW });
+  assert.equal(view.providers.find((p) => p.id === profile.id).error.code, 'PAUSED');
 });
 
 test('shapeProvider: malformed windows entries are skipped', () => {

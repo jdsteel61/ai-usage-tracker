@@ -59,8 +59,10 @@
         <div class="row"><strong>Claude Code profiles</strong><button id="btn-claude-profile-add" class="small-btn">Add profile…</button></div>
         <p class="hint">Usage updates while you use Claude Code. Enable local capture for each account; other cards retain their last reading.</p>
         <label class="row">Active Claude account <select id="set-claude-active"></select></label>
-        <div class="row"><span>Claude</span><button id="btn-claude-capture" class="small-btn">Enable local capture</button></div>
+        <p class="hint">Capture wraps Claude's status-line command and preserves its display. It saves only usage percentages, reset times, and observation times locally; no credentials, prompts, or OAuth usage requests. Node.js must be on PATH.</p>
+        <div class="row claude-capture-row"><span>Claude</span><button id="btn-claude-capture" class="small-btn">Enable capture</button><button id="btn-claude-restore" class="small-btn">Undo capture</button></div>
         <div id="claude-profiles-list"></div>
+        <p class="hint">Undo restores the previous status line if it is unchanged. Cached readings and helper files stay on disk. Removing a profile or quitting does not undo capture; undo before removing a profile.</p>
       </div>
 
       <h3>Refresh &amp; display</h3>

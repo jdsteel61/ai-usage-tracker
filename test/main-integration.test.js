@@ -26,13 +26,17 @@ function reading(id, percent, fetchedAt = Date.now()) {
 /** Run the actual main-process functions with an unsuccessful instance lock.
  * That skips app startup naturally. All account reads, polls, watches, and
  * cache writes are mocked; history and snapshot shaping use production code. */
-function harness({ poll = async () => ({}), local = () => reading('claude', 10) } = {}) {
+function harness({ poll = async () => ({}), local = () => reading('claude', 10), confirmResponse = 0, demo = false } = {}) {
   const handles = new Map();
   const watchers = [];
   const saves = [];
   const gauges = [];
   const tips = [];
   const warnings = [];
+  const dialogs = [];
+  const captureChanges = [];
+  const credentialAttempts = [];
+  const loginChanges = [];
   let refreshCount = 0;
   let pollCount = 0;
   let state = { ...DEFAULTS, providers: { ...DEFAULTS.providers },
@@ -42,12 +46,22 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10) 
   const settings = { get: () => state, patch: (partial) => (state = { ...state, ...partial }) };
   const tray = { setImage: () => {}, setContextMenu: () => {}, setToolTip: (text) => tips.push(text) };
   const mocks = {
-    electron: { app: { requestSingleInstanceLock: () => false, quit: () => {} },
+    electron: { app: { requestSingleInstanceLock: () => false, quit: () => {},
+      setLoginItemSettings: (options) => { loginChanges.push(options); throw new Error('Unexpected login settings change'); } },
       ipcMain: { handle: (id, handler) => handles.set(id, handler), on: () => {} },
+      dialog: { showMessageBox: async (_window, options) => { dialogs.push(options); return { response: confirmResponse }; } },
       nativeTheme: {}, nativeImage: { createFromBuffer: (v) => v }, Menu: { buildFromTemplate: (v) => v } },
-    './credentials': { readSecret: () => { throw new Error('Unexpected credential access'); } },
+    './credentials': { TARGET: 'synthetic-zai-target',
+      ...Object.fromEntries(['secretExists', 'readSecret', 'writeSecret', 'deleteSecret'].map((action) => [action, () => {
+        credentialAttempts.push(action); throw new Error('Unexpected credential access');
+      }])),
+    },
     './providers': { ...providers, pollAll: async (...args) => { pollCount++; return poll(...args); } },
     './providers/claude': { fetchClaudeQuotas: async (deps) => local(deps) },
+    './claudeStatusline': { ...mainRequire('./claudeStatusline'),
+      installCapture: (dir) => { captureChanges.push(['enable', dir]); return { ok: true }; },
+      restoreCapture: (dir) => { captureChanges.push(['undo', dir]); return { ok: true, alreadyDisabled: false }; },
+    },
     './claudeWatcher': { watchClaudeUsage: (file, update) => {
       const watch = { file, update, stopped: false };
       watchers.push(watch);
@@ -58,7 +72,7 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10) 
   };
   const context = vm.createContext({
     require: (id) => Object.hasOwn(mocks, id) ? mocks[id] : mainRequire(id),
-    __dirname: path.dirname(mainPath), process: { env: {}, argv: [], cwd: () => 'C:/fake' },
+    __dirname: path.dirname(mainPath), process: { env: demo ? { AITRACKER_DEMO: '1' } : {}, argv: [], cwd: () => 'C:/fake' },
     setTimeout, clearTimeout, Buffer, injected: { settings, history, tray,
       log: { debug: () => {}, info: () => {}, warn: (...args) => warnings.push(args), error: () => {} },
       scheduler: { refreshNow: () => { refreshCount++; }, start: () => {} } },
@@ -67,12 +81,82 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10) 
   vm.runInContext(`${source}\nsettings = injected.settings; history = injected.history;
     tray = injected.tray; log = injected.log; scheduler = injected.scheduler;
     readingsPath = 'C:/fake/readings.json';
-    globalThis.hooks = { registerIpc, configureClaudeWatcher, pollProvidersOnce,
+    globalThis.hooks = { registerIpc, configureClaudeWatcher, pollProvidersOnce, applyLoginItemSettings,
       applyFreshReadings, updateTrayFromSnapshot,
       getMerged: () => lastMerged, setMerged: (v) => { lastMerged = v; } };`, context);
-  return { ...context.hooks, settings, handles, watchers, saves, gauges, tips, warnings, history,
+  return { ...context.hooks, settings, handles, watchers, saves, gauges, tips, warnings, history, dialogs, captureChanges,
+    credentialAttempts, loginChanges,
     refreshCount: () => refreshCount, pollCount: () => pollCount };
 }
+
+test('main: Claude capture cancellation performs no local changes', async () => {
+  const app = harness();
+  app.registerIpc();
+  for (const action of ['enableCapture', 'restoreCapture']) {
+    const result = await app.handles.get(`claude:${action}`)({}, WORK);
+    assert.equal(result.canceled, true);
+    assert.equal(result.ok, false);
+  }
+  assert.equal(app.captureChanges.length, 0);
+  assert.equal(app.watchers.length, 0);
+  assert.equal(app.dialogs.length, 2);
+  for (const dialog of app.dialogs) {
+    assert.equal(dialog.defaultId, 0);
+    assert.equal(dialog.cancelId, 0);
+    assert.match(dialog.detail, /C:\/fake\/work/);
+    assert.match(dialog.detail, /original-statusline.json/);
+  }
+});
+
+test('main: confirmed Claude capture operations affect only the chosen config folder', async () => {
+  const app = harness({ confirmResponse: 1 });
+  app.registerIpc();
+  assert.equal((await app.handles.get('claude:enableCapture')({}, WORK)).ok, true);
+  assert.equal((await app.handles.get('claude:restoreCapture')({}, WORK)).ok, true);
+  await flush();
+  assert.deepEqual(app.captureChanges, [['enable', 'C:/fake/work'], ['undo', 'C:/fake/work']]);
+  assert.match(app.dialogs[1].detail, /restores only the previous statusLine field/);
+  assert.equal(app.pollCount(), 0);
+  assert.equal(app.refreshCount(), 0);
+});
+
+test('main: unknown profiles and demo mode cannot modify Claude capture', async () => {
+  for (const [app, profile] of [[harness({ confirmResponse: 1 }), 'claude-profile-missing'],
+    [harness({ confirmResponse: 1, demo: true }), 'claude']]) {
+    app.registerIpc();
+    for (const action of ['enableCapture', 'restoreCapture']) {
+      assert.equal((await app.handles.get(`claude:${action}`)({}, profile)).ok, false);
+    }
+    assert.equal(app.captureChanges.length, 0);
+    assert.equal(app.dialogs.length, 0);
+  }
+});
+
+test('main: demo Settings cannot access credentials, query key providers, or change Windows startup', async () => {
+  const app = harness({ demo: true, confirmResponse: 1 });
+  app.registerIpc();
+  for (const provider of ['zai', 'grok', 'gemini', 'openrouter']) {
+    assert.equal(await app.handles.get('provider:keyExists')({}, provider), false);
+    for (const action of ['saveKey', 'testKey', 'removeKey']) {
+      const result = await app.handles.get(`provider:${action}`)({}, provider, 'synthetic-demo-key');
+      assert.equal(result.ok, false);
+      assert.match(result.error, /disabled in demo mode/);
+    }
+  }
+  assert.equal(await app.handles.get('zai:keyExists')({}), false);
+  for (const action of ['saveKey', 'testKey', 'removeKey']) {
+    const result = await app.handles.get(`zai:${action}`)({}, 'synthetic-demo-key');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /disabled in demo mode/);
+  }
+  app.applyLoginItemSettings();
+  app.handles.get('launch-at-login')({}, true);
+  app.handles.get('settings:patch')({}, { launchAtLogin: false });
+  assert.deepEqual(app.credentialAttempts, []);
+  assert.deepEqual(app.loginChanges, []);
+  assert.deepEqual(app.dialogs, []);
+  assert.equal(app.pollCount(), 0);
+});
 
 test('main: selecting another Claude account changes only the local watcher', async () => {
   const readDirs = [];

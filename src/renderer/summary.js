@@ -52,14 +52,42 @@
     return `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ''} old`;
   }
 
-  function freshnessLabel(p, now, hour24) {
+  /** Reading state at display time, including time spent asleep or idle. */
+  function readingStatus(p, { now = Date.now(), intervalMinutes = 5, active = true, hour24 = true } = {}) {
+    const local = p.source === 'claude-statusline' || (p.notes || []).includes('From Claude Code status line')
+      || p.id === 'claude' || (p.id || '').startsWith('claude-profile-');
+    const age = p.ok ? readingAge(p.fetchedAt, now) : null;
+    const limit = (local ? 15 : 2 * intervalMinutes) * 60_000;
+    const expired = Object.values(p.windows || {}).some((w) => w && Date.parse(w.resetsAt) <= now);
+    const stale = p.stale || (p.ok && Number.isFinite(p.fetchedAt) && now - p.fetchedAt > limit) || expired;
+    const state = !active || p.error?.code === 'PAUSED' ? 'paused'
+      : !p.ok ? 'waiting' : stale ? 'cached' : 'current';
+    const lines = [
+      state === 'paused' ? 'Paused: this Claude account is not being watched'
+        : state === 'cached' ? 'Cached: showing the last saved reading'
+          : state === 'waiting' ? 'Waiting: no successful reading yet'
+            : local ? 'Current: recent usage captured from Claude Code' : 'Current: last provider check succeeded',
+      local ? 'Source: local Claude Code status line; use Claude Code to update' : 'Source: provider metadata check',
+      age ? `Reading age: ${age}` : '',
+      p.ok && Number.isFinite(p.fetchedAt) ? `Observed: ${new Date(p.fetchedAt).toLocaleString('en-US', { hour12: !hour24 })}` : '',
+      state === 'paused' ? (p.ok ? 'Showing its saved reading; select its switch to watch' : 'No saved reading; select its switch to watch') : '',
+      expired ? 'Reset passed: the displayed percentage belongs to the previous window' : '',
+      p.error?.message || '',
+      Number.isFinite(p.error?.retryAt) && p.error.retryAt > now
+        ? `Rate limited; next retry ${resetLabel(new Date(p.error.retryAt).toISOString(), now, hour24)}. Refresh respects this pause.` : '',
+    ].filter(Boolean);
+    return { state, label: state, detail: lines.join('\n') };
+  }
+
+  function freshnessLabel(p, now, hour24, intervalMinutes) {
     const labels = [];
     const error = p.error || {};
+    const status = readingStatus(p, { now, hour24, intervalMinutes });
     if (error.code === 'PAUSED') labels.push('paused account');
-    else if (p.stale) labels.push('stale');
+    else if (status.state === 'cached') labels.push('stale');
     const local = p.source === 'claude-statusline' || (p.notes || []).includes('From Claude Code status line');
     if (local) labels.push('local Claude Code reading');
-    if (p.ok && (p.stale || local || error.code === 'PAUSED')) {
+    if (p.ok) {
       const age = readingAge(p.fetchedAt, now);
       if (age) labels.push(`reading ${age}`);
     }
@@ -69,10 +97,10 @@
     return labels.length ? ` [${labels.join('; ')}]` : '';
   }
 
-  function providerLine(p, now, hour24) {
+  function providerLine(p, now, hour24, intervalMinutes) {
     const name = p.plan ? `${p.title} (${p.plan})` : p.title;
     if (!p.ok) {
-      return `${p.title}: unavailable${p.error && p.error.code ? ` (${p.error.code})` : ''}${freshnessLabel(p, now, hour24)}`;
+      return `${p.title}: unavailable${p.error && p.error.code ? ` (${p.error.code})` : ''}${freshnessLabel(p, now, hour24, intervalMinutes)}`;
     }
     const parts = [];
     for (const kind of ['session', 'weekly']) {
@@ -85,7 +113,7 @@
     }
     let s = `${name}: ${parts.join('; ')}`;
     if (p.peak) s += p.peak.mode === 'peak' ? ' [peak]' : ' [off-peak: 50% credit]';
-    s += freshnessLabel(p, now, hour24);
+    s += freshnessLabel(p, now, hour24, intervalMinutes);
     return s;
   }
 
@@ -100,12 +128,12 @@
     const lines = [`AI usage - ${stamp}`];
     for (const p of snap.providers) {
       if (!p || p.enabled === false) continue;
-      lines.push(providerLine(p, now, hour24));
+      lines.push(providerLine(p, now, hour24, opts?.intervalMinutes));
     }
     return lines.join('\n');
   }
 
-  const api = { buildUsageSummary, resetLabel };
+  const api = { buildUsageSummary, resetLabel, readingStatus };
   global.AITRACKER_SUMMARY = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

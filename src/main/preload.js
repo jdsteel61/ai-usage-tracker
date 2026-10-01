@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('tracker', {
   addSubscriptionProfile: (provider) => ipcRenderer.invoke('subscription-profile:add', provider),
   removeSubscriptionProfile: (provider, id) => ipcRenderer.invoke('subscription-profile:remove', provider, id),
   enableClaudeCapture: (id) => ipcRenderer.invoke('claude:enableCapture', id),
+  restoreClaudeCapture: (id) => ipcRenderer.invoke('claude:restoreCapture', id),
   refresh: () => ipcRenderer.send('refresh'),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),

@@ -242,13 +242,19 @@ html, body {
   line-height: 1;
 }
 
-.stale-badge {
+.reading-status {
   color: var(--muted);
-  font-size: 9px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 0 3px;
+  font-size: 8.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: help;
+  white-space: nowrap;
 }
+.reading-status::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.reading-status.current::before { background: #14b8a6; }
+.reading-status.cached::before, .reading-status.waiting::before { background: #f59e0b; }
+.wrow.expired .bar, .wrow.expired .wpct { opacity: 0.55; }
 
 .card-error { color: var(--muted); font-size: 9px; padding: 1px 0; }
 .card-note { color: var(--muted); font-size: 8.5px; margin-top: 1px; }
@@ -358,9 +364,6 @@ html, body {
 .claude-toggle[aria-checked="true"]::after { transform: translateX(11px); background: #fff; }
 .claude-toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .claude-toggle:disabled { opacity: 0.5; cursor: wait; }
-.claude-status { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); cursor: help; }
-.claude-status.ready { background: #14b8a6; }
-.claude-status.waiting { background: #f59e0b; }
 .row input[type="number"], .row input[type="url"], .row input[type="password"], .row select {
   background: var(--card);
   color: var(--text);
@@ -400,3 +403,8 @@ html, body {
 .api-key-actions { justify-content: flex-start; gap: 5px; }
 
 #settings-panel[hidden] { display: none; }
+
+/* Capture actions stay within the compact Settings panel. */
+.claude-profiles .row.claude-capture-row { flex-wrap: wrap; justify-content: flex-start; gap: 4px; }
+.claude-capture-row > span { flex-basis: 100%; overflow-wrap: anywhere; }
+.claude-capture-row .small-btn { white-space: nowrap; }

@@ -11,9 +11,10 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test test/",
-    "lint": "eslint src test",
+    "lint": "eslint src test scripts",
     "audit": "npm audit --omit=dev || true",
-    "package": "electron-packager . ai-usage-tracker --platform=win32 --arch=x64 --out=dist --overwrite --ignore=\"^/.upstream\" --ignore=\"^/test\" --ignore=\"^/dist\" --ignore=\"^/screenshots\" --ignore=\"^/.git\" --ignore=\"^/node_modules\" --ignore=\"^/eslint.config.js$\"",
+    "package": "node scripts/package-windows.cjs",
+    "package:release": "node scripts/package-windows.cjs --zip",
     "screenshot": "electron . --screenshot"
   },
   "devDependencies": {

@@ -153,7 +153,7 @@
     }
     clockEl.title = lastUpdated === null
       ? 'Waiting for first update'
-      : `Last updated ${fmt.format(new Date(lastUpdated))}`;
+      : `Last panel update ${fmt.format(new Date(lastUpdated))}; each card shows its own reading freshness`;
   }
 
   // ---- rendering ----
@@ -161,6 +161,7 @@
   function renderProvider(p) {
     const card = document.createElement('div');
     card.className = 'card';
+    card.dataset.providerId = p.id;
     const isClaude = p.id === 'claude' || p.id.startsWith('claude-profile-');
 
     const head = document.createElement('div');
@@ -220,13 +221,6 @@
     }
     if (isClaude) {
       const active = p.id === (snapshot.claudeActiveProfile || 'claude');
-      const indicator = document.createElement('span');
-      indicator.className = `claude-status ${!active ? 'paused' : p.ok && !p.stale ? 'ready' : 'waiting'}`;
-      indicator.setAttribute('data-tip', [!active ? 'Paused account: showing its last reading'
-        : p.ok && !p.stale ? 'Usage captured locally from Claude Code' : 'Waiting for fresh Claude Code usage',
-      p.staleAgeLabel ? `Reading age: ${p.staleAgeLabel}` : '', p.error?.message || ''].filter(Boolean).join('\n'));
-      indicator.setAttribute('aria-label', !active ? 'Paused' : p.ok && !p.stale ? 'Current local reading' : 'Waiting for usage');
-      head.appendChild(indicator);
       const accounts = snapshot.providers.filter((account) => account.enabled
         && (account.id === 'claude' || account.id.startsWith('claude-profile-')));
       if (accounts.length > 1) {
@@ -250,18 +244,11 @@
         head.appendChild(toggle);
       }
     }
-    if (!isClaude && p.stale && p.ok) {
-      const badge = document.createElement('span');
-      badge.className = 'stale-badge';
-      badge.textContent = `${p.error && p.error.code === 'PAUSED' ? 'paused' : 'stale'} \u00b7 ${p.staleAgeLabel || ''}`.trim();
-      badge.title = p.error && p.error.code === 'PAUSED'
-        ? 'Last reading; this Claude account is not being monitored'
-        : (p.notes || []).includes('From Claude Code status line')
-          ? 'Last usage received from Claude Code; waiting for another reading'
-          : 'Last successful poll; provider currently unreachable or erroring';
-      head.appendChild(badge);
-    }
+    const indicator = document.createElement('span');
+    indicator.className = 'reading-status';
+    head.appendChild(indicator);
     card.appendChild(head);
+    updateReadingStatus(card, p);
 
     if (!p.ok) {
       const err = document.createElement('div');
@@ -297,11 +284,45 @@
     return card;
   }
 
+  function updateReadingStatus(card, p) {
+    const active = !(p.id === 'claude' || p.id.startsWith('claude-profile-'))
+      || p.id === (snapshot.claudeActiveProfile || 'claude');
+    const status = window.AITRACKER_SUMMARY.readingStatus(p, {
+      now: Date.now(), intervalMinutes: settings?.intervalMinutes || 5,
+      active, hour24: settings?.clock24 !== false,
+    });
+    const indicator = card.querySelector('.reading-status');
+    indicator.className = `reading-status ${status.state}`;
+    indicator.textContent = status.label;
+    indicator.setAttribute('data-tip', status.detail);
+    indicator.setAttribute('aria-label', status.detail);
+    card.dataset.readingState = status.state;
+  }
+
+  function tickReadings() {
+    renderClock();
+    if (!snapshot) return;
+    // Update in place so the compact controls and hovered cards stay stable.
+    for (const card of cards.querySelectorAll('.card')) {
+      const p = snapshot.providers.find((provider) => provider.id === card.dataset.providerId);
+      if (p) updateReadingStatus(card, p);
+      for (const cd of card.querySelectorAll('.wcountdown')) {
+        const expired = Date.parse(cd.dataset.resetsAt) <= Date.now();
+        cd.closest('.wrow').classList.toggle('expired', expired);
+        cd.textContent = expired ? 'ended' : countdown(cd.dataset.resetsAt, Date.now()) || '\u2014';
+        const clock = resetClock(cd.dataset.resetsAt, settings?.clock24 !== false);
+        cd.title = clock ? expired ? `Reset passed ${clock}; showing the previous window` : `Resets at ${clock}` : 'Reset time unknown';
+        const row = cd.closest('.wrow');
+        row.title = `${row.dataset.usageDetail} \u00b7 ${cd.dataset.resetsAt ? cd.title : 'does not reset'}`;
+      }
+    }
+  }
+
   function renderRow(p, kind) {
     const row = document.createElement('div');
     row.className = 'wrow';
     const hour24 = !settings || settings.clock24 !== false;
-    const now = snapshot ? snapshot.now : Date.now();
+    const now = Date.now();
 
     const label = document.createElement('span');
     label.className = 'wlabel';
@@ -336,20 +357,23 @@
 
     const cd = document.createElement('span');
     cd.className = 'wcountdown';
-    const cdText = countdown(w.resetsAt, now);
+    cd.dataset.resetsAt = w.resetsAt || '';
+    const expired = Date.parse(w.resetsAt) <= now;
+    row.classList.toggle('expired', expired);
+    const cdText = expired ? 'ended' : countdown(w.resetsAt, now);
     if (cdText === null) {
       cd.textContent = '\u2014';
       cd.title = 'Reset time unknown';
     } else {
       cd.textContent = cdText;
       const clock = resetClock(w.resetsAt, hour24);
-      if (clock) cd.title = `Resets at ${clock}`;
+      if (clock) cd.title = expired ? `Reset passed ${clock}; showing the previous window` : `Resets at ${clock}`;
     }
     row.appendChild(cd);
     // Hover detail for the whole row: used vs remaining + reset time.
     const used = Math.round(w.usedPercent);
-    row.title = `${w.label || kind}: ${used}% used \u00b7 ${100 - used}% remaining${
-      w.resetsAt ? ` \u00b7 resets ${cd.title && cd.title.startsWith('Resets') ? cd.title.slice(10) : ''}` : ' \u00b7 does not reset'}`;
+    row.dataset.usageDetail = `${w.label || kind}: ${used}% used \u00b7 ${100 - used}% remaining`;
+    row.title = `${row.dataset.usageDetail} \u00b7 ${w.resetsAt ? cd.title : 'does not reset'}`;
     return row;
   }
 
@@ -446,6 +470,7 @@
     const builder = window.AITRACKER_SUMMARY || { buildUsageSummary: () => '' };
     const text = builder.buildUsageSummary(snapshot, {
       hour24: !settings || settings.clock24 !== false,
+      intervalMinutes: settings?.intervalMinutes || 5,
       now: Date.now(),
     });
     if (!text || !text.includes('\n')) {
@@ -503,7 +528,7 @@
     host.replaceChildren();
     for (const profile of profiles) {
       const row = document.createElement('div');
-      row.className = 'row claude-profile-row';
+      row.className = `row claude-profile-row${provider === 'claude' ? ' claude-capture-row' : ''}`;
       const name = document.createElement('span');
       name.textContent = profile.label;
       name.title = profile.configDir;
@@ -523,6 +548,11 @@
         capture.textContent = 'Enable capture';
         capture.addEventListener('click', () => enableCapture(profile.id, capture));
         row.insertBefore(capture, remove);
+        const restore = document.createElement('button');
+        restore.className = 'small-btn';
+        restore.textContent = 'Undo capture';
+        restore.addEventListener('click', () => restoreCapture(profile.id, restore));
+        row.insertBefore(restore, remove);
       }
       host.appendChild(row);
     }
@@ -544,11 +574,23 @@
     button.disabled = true;
     try {
       const result = await window.tracker.enableClaudeCapture(id);
-      showToast(result.ok ? 'Capture enabled. Use Claude Code to update usage.' : result.error);
+      if (!result.canceled) showToast(result.ok ? 'Capture enabled. Use Claude Code to update usage.' : result.error);
     } catch { showToast('Could not enable Claude capture'); }
     finally { button.disabled = false; }
   }
   document.getElementById('btn-claude-capture').addEventListener('click', (e) => enableCapture('claude', e.currentTarget));
+
+  async function restoreCapture(id, button) {
+    button.disabled = true;
+    try {
+      const result = await window.tracker.restoreClaudeCapture(id);
+      if (!result.canceled) showToast(result.ok
+        ? 'Capture disabled. Previous status line restored; cached readings kept.'
+        : result.error);
+    } catch { showToast('Could not undo Claude capture'); }
+    finally { button.disabled = false; }
+  }
+  document.getElementById('btn-claude-restore').addEventListener('click', (e) => restoreCapture('claude', e.currentTarget));
 
   for (const provider of ['codex', 'claude']) {
     document.getElementById(`btn-${provider}-profile-add`).addEventListener('click', async () => {
@@ -736,6 +778,6 @@
 
   loadSettingsIntoUI();
   renderClock();
-  setInterval(renderClock, 5_000); // clock + update counter
+  setInterval(tickReadings, 5_000); // clock, reading freshness, reset boundaries
   queueFit(); // size #app before the first snapshot lands
 })();

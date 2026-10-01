@@ -35,7 +35,8 @@ function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
   if (!snap) {
     return {
       id, title: TITLES[id], enabled: !!enabled, ok: false,
-      error: { code: 'DISABLED', message: 'Provider disabled in Settings' },
+      error: enabled ? { code: 'WAITING', message: 'Waiting for the first reading' }
+        : { code: 'DISABLED', message: 'Provider disabled in Settings' },
       windows: { session: null, weekly: null }, extras: [], notes: [], spike: null, peak,
     };
   }
@@ -87,7 +88,7 @@ function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now() }
     const stored = (merged || {})[id];
     const snap = inactiveClaude && stored && stored.ok
       ? { ...stored, stale: true, lastError: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' } }
-      : inactiveClaude && !stored
+      : inactiveClaude
         ? { providerId: id, ok: false, error: { code: 'PAUSED', message: 'No local reading yet' } }
         : stored;
     return shapeProvider(id, snap, {

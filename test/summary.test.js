@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildUsageSummary, resetLabel } = require('../src/renderer/summary');
+const { buildUsageSummary, resetLabel, readingStatus } = require('../src/renderer/summary');
 
 const NOW = Date.parse('2026-09-22T08:35:00Z'); // Tue
 // Expected times must be computed in the machine's local timezone (the
@@ -106,4 +106,50 @@ test('summary: resetLabel weekday boundary', () => {
   assert.equal(resetLabel('2026-09-22T10:00:00Z', NOW, true), t('2026-09-22T10:00:00Z')); // < 24h: time only
   assert.equal(resetLabel('2026-09-25T15:00:00Z', NOW, true), `Fri ${t('2026-09-25T15:00:00Z')}`); // >= 24h: weekday + time
   assert.equal(resetLabel('junk', NOW, true), null);
+});
+
+test('reading state: current readings include source and age; metadata-only success stays honest', () => {
+  const status = readingStatus({ id: 'gemini', ok: true, fetchedAt: NOW - 30_000, windows: {} }, { now: NOW });
+  assert.equal(status.state, 'current');
+  assert.match(status.detail, /last provider check succeeded/);
+  assert.match(status.detail, /Reading age: just now/);
+  assert.doesNotMatch(status.detail, /quota.*current/i);
+});
+
+test('reading state: elapsed time changes freshness without a new snapshot', () => {
+  const local = { id: 'claude', ok: true, fetchedAt: NOW, windows: {} };
+  assert.equal(readingStatus(local, { now: NOW + 15 * 60_000 }).state, 'current');
+  assert.equal(readingStatus(local, { now: NOW + 15 * 60_000 + 1 }).state, 'cached');
+  const remote = { ...local, id: 'codex' };
+  assert.equal(readingStatus(remote, { now: NOW + 2 * 60_000, intervalMinutes: 1 }).state, 'current');
+  assert.equal(readingStatus(remote, { now: NOW + 2 * 60_000 + 1, intervalMinutes: 1 }).state, 'cached');
+});
+
+test('reading state: restored readings, expired windows and rate limits show cached values', () => {
+  const restored = { id: 'codex', ok: true, stale: true, fetchedAt: NOW, windows: {} };
+  assert.equal(readingStatus(restored, { now: NOW }).state, 'cached');
+  const status = readingStatus({ ...restored, stale: false,
+    windows: { session: { resetsAt: new Date(NOW).toISOString() } },
+    error: { code: 'HTTP_429', retryAt: NOW + 60_000 } }, { now: NOW });
+  assert.equal(status.state, 'cached');
+  assert.match(status.detail, /previous window/);
+  assert.match(status.detail, /next retry/);
+  assert.match(status.detail, /Refresh respects this pause/);
+});
+
+test('reading state: paused takes priority over cached and waiting, missing values have no age', () => {
+  const paused = readingStatus({ id: 'claude-profile-work', ok: false,
+    error: { code: 'NO_DATA' }, fetchedAt: NOW }, { now: NOW, active: false });
+  assert.equal(paused.state, 'paused');
+  assert.match(paused.detail, /No saved reading/);
+  assert.doesNotMatch(paused.detail, /Reading age/);
+  assert.equal(readingStatus({ id: 'claude', ok: true, stale: true }, { now: NOW, active: false }).state, 'paused');
+  assert.equal(readingStatus({ id: 'claude', ok: false }, { now: NOW }).state, 'waiting');
+});
+
+test('summary: current remote readings include age and age into stale at copy time', () => {
+  const view = snap([{ id: 'codex', title: 'Codex', ok: true, fetchedAt: NOW,
+    windows: { weekly: { label: 'Week', usedPercent: 20, resetsAt: null } } }]);
+  assert.match(buildUsageSummary(view, { now: NOW }), /\[reading just now\]/);
+  assert.match(buildUsageSummary(view, { now: NOW + 3 * 60_000, intervalMinutes: 1 }), /\[stale; reading 3m old\]/);
 });
