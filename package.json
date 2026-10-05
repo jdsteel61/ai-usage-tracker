@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/",
+    "test": "node scripts/run-tests.cjs",
     "lint": "eslint src test scripts",
     "audit": "npm audit --omit=dev || true",
     "package": "node scripts/package-windows.cjs",
