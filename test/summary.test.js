@@ -167,3 +167,29 @@ test('summary: current remote readings include age and age into stale at copy ti
   assert.match(buildUsageSummary(view, { now: NOW }), /\[reading just now\]/);
   assert.match(buildUsageSummary(view, { now: NOW + 3 * 60_000, intervalMinutes: 1 }), /\[stale; reading 3m old\]/);
 });
+
+test('summary: Claude model-specific weekly limits appear in the line and hover detail only', () => {
+  const p = {
+    id: 'claude', title: 'Claude', enabled: true, ok: true, plan: 'max', stale: false, fetchedAt: NOW, source: 'claude-api',
+    windows: {
+      session: { label: '5 hr', usedPercent: 3, resetsAt: '2026-09-22T12:40:00Z' },
+      weekly: { label: 'Week', usedPercent: 1, resetsAt: '2026-09-24T15:00:00Z' },
+    },
+    extras: [
+      { id: 'claude:model:fable', kind: 'other', label: 'Fable', usedPercent: 0, resetsAt: '2026-09-27T01:00:00Z' },
+      { id: 'claude:model:old', kind: 'other', label: 'Old', usedPercent: 50, resetsAt: '2026-09-21T01:00:00Z' },
+      { id: 'claude:model:evil', kind: 'other', label: 'Ev<b>il\nline', usedPercent: 12.4, resetsAt: '2026-09-27T01:00:00Z' },
+      { id: 'zai:web', kind: 'other', label: 'Web', usedPercent: 5, resetsAt: '2026-09-27T01:00:00Z' },
+    ],
+    notes: ['From Claude usage API'],
+  };
+  const line = buildUsageSummary(snap([p]), { now: NOW }).split('\n');
+  assert.equal(line.length, 2);
+  assert.match(line[1], /; Fable week 0%; Ev b il line week 12%/);
+  assert.ok(!line[1].includes('Old') && !line[1].includes('Web'));
+  const detail = readingStatus(p, { now: NOW }).detail;
+  assert.match(detail, /Model weekly limits:\n {2}Fable 0% used \(resets /);
+  assert.ok(!detail.includes('<'));
+  const plain = buildUsageSummary(snap([{ ...p, extras: [] }]), { now: NOW });
+  assert.ok(!plain.includes('week 0%'));
+});

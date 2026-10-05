@@ -366,3 +366,18 @@ Upgrade notes: re-tick API top-up once per account (the old opt-in is not
 honoured because approval is now path-bound). Model-specific weekly limits
 from the pre-v1.5 API adapter are not carried over; only 5-hour and weekly
 windows are shown. 233/233 tests, lint clean, demo screenshot self-test OK.
+
+## v1.6.1 - per-model weekly limits return, CI fix
+
+Restored the model-specific weekly limits (e.g. "Fable week 0%") dropped in
+v1.6.0. They come from the `weekly_scoped` entries of the usage API's
+`limits` array (shape verified live), so they appear only when API top-up is
+on. Parsed defensively (finite 0-100 percent, future reset, plain-text label
+capped at 40 chars, max 6, entries with no model skipped), merged per window
+with the API's own observation time (local capture cannot delete them; they
+expire at the API stale cutoff or their reset), and shown only in the card
+hover and the copy-for-agents summary - never as extra bars, so cards stay
+compact. Also: npm test now runs through scripts/run-tests.cjs because
+`node --test test/` fails on Node 22 (CI); the Windows build workflow passes.
+Announcement draft refreshed for the multi-account design. 240/240 tests,
+lint clean.

@@ -131,3 +131,13 @@ test('reading cache: a pre-planted fixed temporary name is never written through
   saveReadings(file, { codex: snapshot() }, ['codex']);
   assert.equal(fs.readFileSync(`${file}.tmp`, 'utf8'), 'victim');
 });
+
+test('reading cache: Claude model-specific windows round-trip with their observation time', (t) => {
+  const filePath = cacheFile(t);
+  const reading = snapshot({ providerId: 'claude', source: 'claude-api', notes: ['From Claude usage API'] });
+  reading.windows.push({ id: 'claude:model:fable', kind: 'other', label: 'Fable', usedPercent: 4,
+    resetsAt: '2026-10-11T01:00:00.000Z', periodSeconds: 604800, observedAt: 1000 });
+  saveReadings(filePath, { claude: reading }, ['claude']);
+  const [, model] = loadReadings(filePath, ['claude']).claude.windows;
+  assert.deepEqual(model, reading.windows[1]);
+});

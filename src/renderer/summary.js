@@ -42,6 +42,14 @@
     return s;
   }
 
+  /** Claude model-specific weekly limits (API top-up only), plain text, live ones only. */
+  function modelLimits(p, now) {
+    return (Array.isArray(p.extras) ? p.extras : []).filter((w) => w && typeof w.id === 'string'
+      && w.id.startsWith('claude:model:') && Number.isFinite(w.usedPercent) && !(Date.parse(w.resetsAt) <= now))
+      .map((w) => ({ name: String(w.label || '').replace(/[^\p{L}\p{N} .\-_+()]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 40),
+        w })).filter((m) => m.name);
+  }
+
   function readingAge(fetchedAt, now) {
     if (!Number.isFinite(fetchedAt)) return null;
     const minutes = Math.floor(Math.max(0, now - fetchedAt) / 60_000);
@@ -86,6 +94,10 @@
       age ? `Reading age: ${age}` : '',
       p.ok && Number.isFinite(p.fetchedAt) ? `Observed: ${new Date(p.fetchedAt).toLocaleString('en-US', { hour12: !hour24 })}` : '',
       expired ? 'Reset passed: the displayed percentage belongs to the previous window' : '',
+      ...(modelLimits(p, now).length ? ['Model weekly limits:', ...modelLimits(p, now).map(({ name, w }) => {
+        const r = resetLabel(w.resetsAt, now, hour24);
+        return `  ${name} ${Math.round(w.usedPercent)}% used${r ? ` (resets ${r})` : ''}`;
+      })] : []),
       p.error?.message || '',
       Number.isFinite(p.error?.retryAt) && p.error.retryAt > now
         ? `Rate limited; next retry ${resetLabel(new Date(p.error.retryAt).toISOString(), now, hour24)}. Refresh respects this pause.` : '',
@@ -120,6 +132,7 @@
       const line = p.windows && windowLine(p.windows[kind], now, hour24);
       if (line) parts.push(line);
     }
+    for (const { name, w } of modelLimits(p, now)) parts.push(`${name} week ${Math.round(w.usedPercent)}%`);
     if (!parts.length) {
       for (const note of p.notes || []) parts.push(note);
       if (!parts.length) parts.push('no quota windows reported');

@@ -109,6 +109,10 @@ missing or older than 25 minutes. A fresh local capture means zero API calls.
   from local capture or the API. A failed API call never replaces a good
   reading: the card keeps showing it as cached (not current) until a newer
   observation arrives, and its hover explains the cooldown or sign-in problem.
+- When the API reports model-specific weekly limits (for example a per-model
+  week), they appear in the card's reading-status hover and the copy-for-agents
+  summary ("Fable week 0%"), never as extra bars. They come only from the API
+  and are hidden once their reset passes or they are over 35 minutes old.
 
 ## Understand reading freshness
 

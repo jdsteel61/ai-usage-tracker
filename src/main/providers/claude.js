@@ -18,6 +18,8 @@ const USER_AGENT = 'ai-usage-tracker/1.5 (claude-usage-topup)';
 const API_TOPUP_AFTER_MS = 25 * 60_000;
 const API_TIMEOUT_MS = 15_000;
 const TOKEN_RE = /^[!-~]{1,4096}$/; // visible ASCII only: safe to place in a header
+const MAX_MODEL_WINDOWS = 6;
+const MODEL_LABEL_MAX = 40;
 const WINDOW_SPECS = [
   ['five_hour', 'session', '5 hr', 5 * 3600],
   ['seven_day', 'weekly', 'Week', 7 * 24 * 3600],
@@ -42,6 +44,40 @@ function normalizeClaudeUsage(data, now = Date.now()) {
     source: 'claude-statusline', stale: now - fetchedAt > LOCAL_STALE_MS };
 }
 
+/** Plain-text model name: letters, digits, spaces and a few separators only. */
+function modelLabel(name) {
+  if (typeof name !== 'string') return '';
+  return name.replace(/[^\p{L}\p{N} .\-_+()]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, MODEL_LABEL_MAX).trim();
+}
+
+function modelSlug(value) {
+  return typeof value === 'string' ? value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, MODEL_LABEL_MAX) : '';
+}
+
+/** Pure: model-specific weekly limits from body.limits (kind 'weekly_scoped'
+ * with scope.model). Shown only in hover detail and the copy summary. Malformed,
+ * expired or duplicate entries are skipped; at most MAX_MODEL_WINDOWS are kept. */
+function modelWindows(body, now) {
+  const out = [];
+  const limits = body && Array.isArray(body.limits) ? body.limits : [];
+  for (const lim of limits) {
+    if (out.length >= MAX_MODEL_WINDOWS) break;
+    if (!lim || lim.kind !== 'weekly_scoped') continue;
+    const model = lim.scope && lim.scope.model;
+    if (!model || typeof model !== 'object') continue;
+    const slug = modelSlug(model.id) || modelSlug(model.display_name);
+    const label = modelLabel(model.display_name) || modelLabel(model.id);
+    const resetsAt = typeof lim.resets_at === 'string' ? Date.parse(lim.resets_at) : NaN;
+    if (!slug || !label || typeof lim.percent !== 'number' || !Number.isFinite(lim.percent)
+        || lim.percent < 0 || lim.percent > 100 || !(resetsAt > now)) continue;
+    const id = `claude:model:${slug}`;
+    if (out.some((w) => w.id === id)) continue;
+    out.push({ id, kind: 'other', label, usedPercent: lim.percent,
+      resetsAt: new Date(resetsAt).toISOString(), periodSeconds: 7 * 24 * 3600, observedAt: now });
+  }
+  return out;
+}
+
 /** Pure: the usage endpoint's { five_hour|seven_day: { utilization, resets_at } }. */
 function normalizeClaudeApiUsage(body, auth, now = Date.now()) {
   const windows = [];
@@ -55,7 +91,7 @@ function normalizeClaudeApiUsage(body, auth, now = Date.now()) {
   }
   if (!windows.length) return errorSnapshot('claude', 'NO_DATA', 'Claude usage API returned no current subscription windows');
   return { ...okSnapshot('claude', { plan: auth && auth.plan ? String(auth.plan).slice(0, 40) : null,
-    windows, fetchedAt: now, notes: [CLAUDE_API_NOTE] }), source: 'claude-api', stale: false };
+    windows: [...windows, ...modelWindows(body, now)], fetchedAt: now, notes: [CLAUDE_API_NOTE] }), source: 'claude-api', stale: false };
 }
 
 /** Read-only token access. null when signed out or the credential file is not
@@ -162,13 +198,13 @@ async function fetchClaudeQuotas(deps = {}) {
   const now = deps.now ? deps.now() : Date.now();
   const local = readLocalClaude(deps, now);
   const previous = deps.previous && deps.previous.ok ? deps.previous : null;
-  let best = mergeClaudeReadings([previous, local]);
+  let best = mergeClaudeReadings([previous, local], now);
   const needsTopUp = !best || now - best.fetchedAt > API_TOPUP_AFTER_MS
-    || best.windows.some((w) => Date.parse(w.resetsAt) <= now);
+    || best.windows.some((w) => w.kind !== 'other' && Date.parse(w.resetsAt) <= now);
   let apiError = null;
   if (deps.apiTopUp && deps.budget && needsTopUp) {
     const api = await topUpFromApi(deps, local.ok ? local.fetchedAt : 0);
-    if (api.ok) best = mergeClaudeReadings([best, api]);
+    if (api.ok) best = mergeClaudeReadings([best, api], now);
     else apiError = api;
   }
   if (!best) return apiError || local;

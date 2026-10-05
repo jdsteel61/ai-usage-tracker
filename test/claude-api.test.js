@@ -10,7 +10,7 @@ const {
   SUCCESSES_TO_EASE, QUIET_EASE_MS, UNRECOVERABLE_BLOCK_MS,
 } = require('../src/main/claudeApiBudget');
 const { fetchClaudeQuotas, normalizeClaudeApiUsage, readClaudeAuth, API_TOPUP_AFTER_MS } = require('../src/main/providers/claude');
-const { mergeClaudeReadings, reconcileClaudeReadings, orderByObservationAge } = require('../src/main/claudeMerge');
+const { mergeClaudeReadings, reconcileClaudeReadings, orderByObservationAge, API_STALE_MS } = require('../src/main/claudeMerge');
 const { writeFileAtomic } = require('../src/main/atomicWrite');
 
 const MIN = 60_000;
@@ -731,4 +731,92 @@ test('claude credentials: a real symlink to another folder is rejected on this m
 test('budget constants are sane', () => {
   assert.ok(BACKOFF_MS.every((ms, i) => i === 0 || ms >= BACKOFF_MS[i - 1]));
   assert.equal(MAX_RETRY_AFTER_MS, 24 * HOUR);
+});
+
+// ---- model-specific weekly limits (API top-up only) ----
+const scoped = (name, percent = 0, id = null, resets = new Date(T0 + 24 * HOUR).toISOString()) => ({
+  kind: 'weekly_scoped', group: 'weekly', percent, resets_at: resets, scope: { model: { id, display_name: name }, surface: null },
+});
+const withLimits = (limits) => ({ ...apiBody, limits });
+const models = (snap) => snap.windows.filter((w) => w.kind === 'other');
+
+test('claude api models: zero, one and many scoped limits; null id falls back to the name', () => {
+  assert.equal(models(normalizeClaudeApiUsage(withLimits([]), null, T0)).length, 0);
+  assert.equal(models(normalizeClaudeApiUsage(apiBody, null, T0)).length, 0);
+  const one = normalizeClaudeApiUsage(withLimits([
+    { kind: 'session', percent: 3, resets_at: new Date(T0 + HOUR).toISOString(), scope: null },
+    { kind: 'weekly_all', percent: 1, resets_at: new Date(T0 + HOUR).toISOString(), scope: null },
+    scoped('Fable', 0),
+  ]), null, T0);
+  assert.equal(one.windows.length, 3);
+  assert.deepEqual(models(one).map((w) => [w.id, w.label, w.usedPercent, w.periodSeconds, w.observedAt]),
+    [['claude:model:fable', 'Fable', 0, 604800, T0]]);
+  const many = normalizeClaudeApiUsage(withLimits(Array.from({ length: 10 }, (_, i) => scoped(`Model ${i}`, i, `m${i}`))), null, T0);
+  assert.equal(models(many).length, 6);
+  assert.equal(models(many)[0].id, 'claude:model:m0');
+  const dup = normalizeClaudeApiUsage(withLimits([scoped('Fable', 1), scoped('Fable', 2)]), null, T0);
+  assert.equal(models(dup).length, 1);
+});
+
+test('claude api models: malformed, expired, surface-only and hostile entries are handled', () => {
+  const past = new Date(T0 - HOUR).toISOString();
+  const snap = normalizeClaudeApiUsage(withLimits([
+    scoped('Expired', 5, 'e', past),
+    scoped('Neg', -1), scoped('Big', 101), scoped('NaN', NaN), scoped('Str', '5'),
+    { kind: 'weekly_scoped', percent: 5, resets_at: new Date(T0 + HOUR).toISOString(), scope: { model: null, surface: { display_name: 'Web' } } },
+    { kind: 'weekly_scoped', percent: 5, resets_at: 'garbage', scope: { model: { display_name: 'BadReset' } } },
+    null, 'x', { kind: 'weekly_scoped' },
+    scoped('<img src=x onerror=alert(1)>Evil\n\u202e"&\'' + 'x'.repeat(200), 7),
+    scoped('<>', 8),
+  ]), null, T0);
+  const found = models(snap);
+  assert.equal(found.length, 1);
+  assert.match(found[0].label, /^[\p{L}\p{N} .\-_+()]+$/u);
+  assert.ok(found[0].label.length <= 40);
+  assert.ok(!/[<>&"'\n]/.test(found[0].label + found[0].id));
+  assert.match(found[0].id, /^claude:model:[a-z0-9-]+$/);
+});
+
+test('claude api models: a scoped limit alone does not make a reading', () => {
+  const snap = normalizeClaudeApiUsage({ limits: [scoped('Fable')] }, null, T0);
+  assert.equal(snap.error.code, 'NO_DATA');
+});
+
+test('claude api models: local capture keeps them within the cutoff, drops them after it or after reset', async () => {
+  const api = normalizeClaudeApiUsage(withLimits([scoped('Fable', 4, null, new Date(T0 + 2 * HOUR).toISOString())]), null, T0);
+  const local = (at) => ({ ok: true, source: 'claude-statusline', fetchedAt: at, notes: ['From Claude Code status line'],
+    windows: [{ id: 'claude:session', kind: 'session', label: '5 hr', usedPercent: 9, resetsAt: new Date(T0 + 3 * HOUR).toISOString(), periodSeconds: 18000, observedAt: at },
+      { id: 'claude:weekly', kind: 'weekly', label: 'Week', usedPercent: 9, resetsAt: new Date(T0 + 3 * HOUR).toISOString(), periodSeconds: 604800, observedAt: at }] });
+  const now = T0 + 10 * MIN;
+  const merged = mergeClaudeReadings([api, local(now - MIN)], now);
+  assert.deepEqual(merged.windows.map((w) => w.kind), ['session', 'weekly', 'other']);
+  assert.equal(merged.windows[0].usedPercent, 9);
+  assert.equal(merged.fetchedAt, now - MIN, 'model windows never set freshness');
+  assert.equal(models(merged)[0].observedAt, T0, 'keeps the API observation time');
+  // Identity is preserved when nothing is combined.
+  assert.equal(mergeClaudeReadings([api], T0), api);
+  // Older than the stale cutoff or past its reset: removed.
+  const late = T0 + API_STALE_MS + MIN;
+  assert.equal(models(mergeClaudeReadings([api, local(late - MIN)], late)).length, 0);
+  const after = T0 + 3 * HOUR;
+  assert.equal(models(mergeClaudeReadings([{ ...api, windows: api.windows.map((w) => ({ ...w, observedAt: after - MIN })) }, local(after - MIN)], after)).length, 0);
+  // A newer API reading replaces the earlier value.
+  const newer = normalizeClaudeApiUsage(withLimits([scoped('Fable', 9, null, new Date(T0 + 2 * HOUR).toISOString())]), null, T0 + 5 * MIN);
+  assert.equal(models(mergeClaudeReadings([api, newer], T0 + 6 * MIN))[0].usedPercent, 9);
+});
+
+test('claude api models: flow through a top-up fetch and the reading cache', async () => {
+  const { safeReading } = require('../src/main/readingCache');
+  const h = harness({ local: null, body: withLimits([scoped('Fable', 3, null, new Date(T0 + 24 * HOUR).toISOString())]) });
+  const snap = await fetchClaudeQuotas(h.deps);
+  assert.equal(models(snap).length, 1);
+  const stored = safeReading('claude', JSON.parse(JSON.stringify(snap)));
+  assert.deepEqual(models(stored).map((w) => [w.id, w.label, w.usedPercent, w.observedAt]), [['claude:model:fable', 'Fable', 3, T0]]);
+  // Next poll: fresh local capture, no API call, model limit survives.
+  const h2 = harness({ previous: stored, apiTopUp: true, local: usageFile(h.c, { session: [10, MIN], weekly: [11, MIN] }) });
+  const again = await fetchClaudeQuotas(h2.deps);
+  assert.equal(h2.calls.length, 0);
+  assert.equal(models(again).length, 1);
+  const { shapeProvider } = require('../src/main/snapshotView');
+  assert.equal(shapeProvider('claude', again, { enabled: true, activeAlerts: {}, now: T0 }).extras[0].label, 'Fable');
 });
