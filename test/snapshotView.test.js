@@ -73,17 +73,19 @@ test('shapeProvider: local reading source and cooldown metadata survive shaping'
   assert.equal(view.error.retryAt, retryAt);
 });
 
-test('shapeSnapshot: inactive Claude profile shows its last reading as paused', () => {
+test('shapeSnapshot: every Claude profile shows its own reading and source, none is paused', () => {
   const profile = { id: 'claude-profile-work', label: 'Claude Work', configDir: 'C:\\claude-work' };
-  const settings = { ...DEFAULTS, claudeProfiles: [profile], claudeActiveProfile: 'claude' };
-  const view = shapeSnapshot({ claude: okSnap('claude'), [profile.id]: okSnap(profile.id) },
-    { settings, now: NOW });
+  const api = { ...okSnap(profile.id, 33), notes: ['From Claude usage API'] };
+  const view = shapeSnapshot({ claude: { ...okSnap('claude'), notes: ['From Claude Code status line'] }, [profile.id]: api },
+    { settings: { ...DEFAULTS, claudeProfiles: [profile] }, now: NOW });
   const work = view.providers.find((p) => p.id === profile.id);
+  const main = view.providers.find((p) => p.id === 'claude');
   assert.equal(work.ok, true);
-  assert.equal(work.stale, true);
-  assert.equal(work.error.code, 'PAUSED');
-  assert.equal(work.windows.session.usedPercent, 10);
-  assert.equal(view.providers.find((p) => p.id === 'claude').stale, false);
+  assert.equal(work.stale, false);
+  assert.equal(work.error, null);
+  assert.equal(work.source, 'claude-api');
+  assert.equal(main.source, 'claude-statusline');
+  assert.equal(Object.hasOwn(view, 'claudeActiveProfile'), false);
 });
 
 test('shapeSnapshot: snapshot missing notes/windows fields entirely is tolerated', () => {
@@ -112,11 +114,11 @@ test('shapeSnapshot: empty merged map never throws (fresh boot, settings patch)'
   assert.equal(view.providers.find((p) => p.id === 'codex').error.code, 'WAITING');
 });
 
-test('shapeSnapshot: inactive account without a successful reading is paused even after an error', () => {
+test('shapeSnapshot: a Claude profile without a reading is waiting with its error, not paused', () => {
   const profile = { id: 'claude-profile-work', label: 'Work', configDir: 'C:\\claude-work' };
   const view = shapeSnapshot({ [profile.id]: { ok: false, error: { code: 'NO_DATA' } } },
     { settings: { ...DEFAULTS, claudeProfiles: [profile] }, now: NOW });
-  assert.equal(view.providers.find((p) => p.id === profile.id).error.code, 'PAUSED');
+  assert.equal(view.providers.find((p) => p.id === profile.id).error.code, 'NO_DATA');
 });
 
 test('shapeProvider: malformed windows entries are skipped', () => {

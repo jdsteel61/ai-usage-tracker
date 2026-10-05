@@ -79,11 +79,14 @@ test('settings: interval has a safe minimum of one minute', () => {
   assert.equal(sanitize({ intervalMinutes: 'ten' }).intervalMinutes, 5);
 });
 
-test('settings: only a configured Claude profile can be active', () => {
+test('settings: Claude API top-up is opt-in per known profile and old active-profile key is ignored', () => {
   const profile = { id: 'claude-profile-work', label: 'Claude Work', configDir: 'C:\\claude-work' };
-  assert.equal(sanitize({ claudeProfiles: [profile], claudeActiveProfile: profile.id }).claudeActiveProfile, profile.id);
-  assert.equal(sanitize({ claudeActiveProfile: profile.id }).claudeActiveProfile, 'claude');
-  assert.equal(sanitize({ claudeProfiles: [profile], claudeActiveProfile: 'unknown' }).claudeActiveProfile, 'claude');
+  assert.deepEqual(sanitize({}).claudeApiTopUp, {});
+  const on = sanitize({ claudeProfiles: [profile], claudeApiTopUp: { claude: true, [profile.id]: true, 'claude-profile-gone': true, other: true } });
+  assert.deepEqual(on.claudeApiTopUp, { claude: true, [profile.id]: true });
+  assert.deepEqual(sanitize({ claudeApiTopUp: { claude: 'yes', x: 1 } }).claudeApiTopUp, {});
+  const old = sanitize({ claudeProfiles: [profile], claudeActiveProfile: profile.id });
+  assert.equal(Object.hasOwn(old, 'claudeActiveProfile'), false);
 });
 
 test('settings: secret-shaped keys are refused during load', () => {
@@ -121,4 +124,24 @@ test('settings: secretish key detector', () => {
   assert.equal(isSecretishKey('accessToken'), true);
   assert.equal(isSecretishKey('password'), true);
   assert.equal(isSecretishKey('intervalMinutes'), false);
+});
+
+test('history: purge forgets one provider only', () => {
+  const h = new HistoryStore(tmpFile('h.json'));
+  h.append('claude-profile-a', 'session', { t: 1, percent: 1, resetsAt: null, state: 'ok' });
+  h.append('claude', 'session', { t: 1, percent: 2, resetsAt: null, state: 'ok' });
+  h.purge('claude');
+  assert.equal(h.get('claude', 'session').length, 0);
+  assert.equal(h.get('claude-profile-a', 'session').length, 1);
+});
+
+test('settings and history saves never write through a pre-planted fixed temporary name', () => {
+  for (const make of [(f) => { const s = new SettingsStore(f); s.load(); return s; }, (f) => new HistoryStore(f)]) {
+    const file = tmpFile('data.json');
+    fs.writeFileSync(`${file}.tmp`, 'victim');
+    const store = make(file);
+    if (store instanceof SettingsStore) store.patch({ clock24: false }); else { store.append('x', 'y', { t: 1, percent: 1 }); store.save(); }
+    assert.equal(fs.readFileSync(`${file}.tmp`, 'utf8'), 'victim');
+    assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')));
+  }
 });

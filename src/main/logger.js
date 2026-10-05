@@ -16,7 +16,9 @@ const path = require('path');
 const MAX_LOG_BYTES = 512 * 1024;
 // Ordered: most-specific patterns first so a Bearer header is consumed before
 // the generic field matcher can half-match it.
-const BEARER_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9\-._~+/=]{8,}/gi;
+// A header value cannot span lines, but a malformed token can: swallow every
+// following fragment too, and short or partial values (no minimum length).
+const BEARER_RE = /\b(Bearer|Basic)\s+[^\s"',;]+(?:[ \t]*[\r\n]+[ \t]*[^\s"',;]+)*/gi;
 const OPENAI_KEY_RE = /\bsk-[A-Za-z0-9\-_]{16,}/g;
 const ZAI_KEY_RE = /[A-Fa-f0-9]{32}\.[A-Za-z0-9_-]{6,}/g; // zai key format: hex32.dot-id
 const SECRET_FIELD_RE = /\b(accessToken|refresh[_-]?token|api[_-]?key|apiKey|password|secret|credential|authorization|cookie|token)["']?\s*[:=]\s*("?)(?!Bearer\b|Basic\b|\[)[^"'\s,}]{4,}\2/gi;

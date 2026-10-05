@@ -42,6 +42,14 @@ test('reading cache: roundtrip every provider and profile, always loaded as stal
   assert.deepEqual(fs.readdirSync(path.dirname(filePath)), ['readings.json'], 'temporary file renamed');
 });
 
+test('reading cache: Claude API readings keep their source note', (t) => {
+  const filePath = cacheFile(t);
+  saveReadings(filePath, { claude: snapshot({ providerId: 'claude', source: 'claude-api', notes: ['From Claude usage API'] }) }, ['claude']);
+  const loaded = loadReadings(filePath, ['claude']);
+  assert.equal(loaded.claude.source, 'claude-api');
+  assert.deepEqual(loaded.claude.notes, ['From Claude usage API']);
+});
+
 test('reading cache: serializes only normalized fields, drops secrets, raw responses and errors', (t) => {
   const filePath = cacheFile(t);
   const snap = snapshot({ accessToken: 'SECRET_TOKEN', raw: { secret: 'SECRET_RAW' },
@@ -105,4 +113,21 @@ test('reading cache: disabled readings survive unrelated fresh results and resta
   const loaded = loadReadings(filePath, allowed);
   assert.equal(loaded.codex.fetchedAt, 1000, 'disabled Codex retains its original reading');
   assert.equal(loaded.zai.fetchedAt, 2000);
+});
+
+test('reading cache: per-window observation times survive a save and load', (t) => {
+  const file = cacheFile(t);
+  const claude = snapshot({ providerId: 'claude', source: 'claude-statusline', notes: ['From Claude Code status line'],
+    windows: [{ ...snapshot().windows[0], observedAt: 1200 }] });
+  saveReadings(file, { claude }, ['claude']);
+  assert.equal(loadReadings(file, ['claude']).claude.windows[0].observedAt, 1200);
+  assert.equal(safeReading('claude', { ...claude, windows: [{ ...claude.windows[0], observedAt: 'soon' }] })
+    .windows[0].observedAt, undefined);
+});
+
+test('reading cache: a pre-planted fixed temporary name is never written through', (t) => {
+  const file = cacheFile(t);
+  fs.writeFileSync(`${file}.tmp`, 'victim');
+  saveReadings(file, { codex: snapshot() }, ['codex']);
+  assert.equal(fs.readFileSync(`${file}.tmp`, 'utf8'), 'victim');
 });

@@ -64,15 +64,15 @@ test('summary: invalid input yields empty string', () => {
   assert.equal(buildUsageSummary({}), '');
 });
 
-test('summary: paused local account includes the reading age and expired resets', () => {
+test('summary: old local account includes the reading age and expired resets', () => {
   const text = buildUsageSummary(snap([{
     title: 'Claude Work', ok: true, stale: true, fetchedAt: NOW - 95 * 60_000,
-    source: 'claude-statusline', error: { code: 'PAUSED' },
+    source: 'claude-statusline',
     windows: { session: { label: '5 hr', usedPercent: 20, resetsAt: '2026-09-22T08:00:00Z' } },
   }]), { now: NOW });
   assert.match(text, /reset passed/);
   assert.doesNotMatch(text, /\(resets /);
-  assert.match(text, /\[paused account; local Claude Code reading; reading 1h 35m old\]/);
+  assert.match(text, /\[stale; local Claude Code reading; reading 1h 35m old\]/);
 });
 
 test('summary: cached and unavailable cooldowns include the next retry', () => {
@@ -96,10 +96,13 @@ test('summary: local fresh reading includes age without stale flag', () => {
   assert.doesNotMatch(text, /stale/);
 });
 
-test('summary: paused without a reading does not invent an age', () => {
-  const text = buildUsageSummary(snap([{ title: 'Claude Work', ok: false, error: { code: 'PAUSED' } }]), { now: NOW });
-  assert.ok(text.includes('unavailable (PAUSED) [paused account]'));
-  assert.doesNotMatch(text, /reading|old/);
+test('summary: Claude API reading is labeled and unreadable accounts invent no age', () => {
+  const api = buildUsageSummary(snap([{ title: 'Claude', ok: true, fetchedAt: NOW - 12 * 60_000, source: 'claude-api',
+    windows: { session: { label: '5 hr', usedPercent: 4, resetsAt: null } } }]), { now: NOW });
+  assert.match(api, /\[Claude usage API reading; reading 12m old\]/);
+  const none = buildUsageSummary(snap([{ title: 'Claude Work', ok: false, error: { code: 'NO_DATA' } }]), { now: NOW });
+  assert.ok(none.includes('unavailable (NO_DATA)'));
+  assert.doesNotMatch(none, /reading|old/);
 });
 
 test('summary: resetLabel weekday boundary', () => {
@@ -137,14 +140,25 @@ test('reading state: restored readings, expired windows and rate limits show cac
   assert.match(status.detail, /Refresh respects this pause/);
 });
 
-test('reading state: paused takes priority over cached and waiting, missing values have no age', () => {
-  const paused = readingStatus({ id: 'claude-profile-work', ok: false,
-    error: { code: 'NO_DATA' }, fetchedAt: NOW }, { now: NOW, active: false });
-  assert.equal(paused.state, 'paused');
-  assert.match(paused.detail, /No saved reading/);
-  assert.doesNotMatch(paused.detail, /Reading age/);
-  assert.equal(readingStatus({ id: 'claude', ok: true, stale: true }, { now: NOW, active: false }).state, 'paused');
-  assert.equal(readingStatus({ id: 'claude', ok: false }, { now: NOW }).state, 'waiting');
+test('reading state: Claude is never paused; missing values have no age; API readings last longer', () => {
+  const waiting = readingStatus({ id: 'claude-profile-work', ok: false,
+    error: { code: 'NO_DATA' }, fetchedAt: NOW }, { now: NOW });
+  assert.equal(waiting.state, 'waiting');
+  assert.doesNotMatch(waiting.detail, /Reading age/);
+  assert.equal(readingStatus({ id: 'claude', ok: true, stale: true }, { now: NOW }).state, 'cached');
+  const api = { id: 'claude', ok: true, fetchedAt: NOW, source: 'claude-api', windows: {} };
+  assert.equal(readingStatus(api, { now: NOW + 35 * 60_000 }).state, 'current');
+  assert.equal(readingStatus(api, { now: NOW + 35 * 60_000 + 1 }).state, 'cached');
+  assert.match(readingStatus(api, { now: NOW }).detail, /Source: Claude usage API/);
+});
+
+test('source label: local is live when fresh; ages and API source are spelled out', () => {
+  const { sourceLabel } = require('../src/renderer/summary');
+  const local = { source: 'claude-statusline', fetchedAt: NOW - 30_000 };
+  assert.equal(sourceLabel(local, NOW), 'local \u00b7 live');
+  assert.equal(sourceLabel({ ...local, fetchedAt: NOW - 7 * 60_000 }, NOW), 'local \u00b7 7 min ago');
+  assert.equal(sourceLabel({ notes: ['From Claude usage API'], fetchedAt: NOW - 12 * 60_000 }, NOW), 'api \u00b7 12 min ago');
+  assert.equal(sourceLabel({ source: 'claude-api', fetchedAt: NOW - 95 * 60_000 }, NOW), 'api \u00b7 1 h 35 min ago');
 });
 
 test('summary: current remote readings include age and age into stale at copy time', () => {

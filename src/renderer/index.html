@@ -57,10 +57,10 @@
       </div>
       <div class="claude-profiles">
         <div class="row"><strong>Claude Code profiles</strong><button id="btn-claude-profile-add" class="small-btn">Add profile…</button></div>
-        <p class="hint">Usage updates while you use Claude Code. Enable local capture for each account; other cards retain their last reading.</p>
-        <label class="row">Active Claude account <select id="set-claude-active"></select></label>
-        <p class="hint">Capture wraps Claude's status-line command and preserves its display. It saves only usage percentages, reset times, and observation times locally; no credentials, prompts, or OAuth usage requests. Node.js must be on PATH.</p>
-        <div class="row claude-capture-row"><span>Claude</span><button id="btn-claude-capture" class="small-btn">Enable capture</button><button id="btn-claude-restore" class="small-btn">Undo capture</button></div>
+        <p class="hint">Every account is watched at once. Usage updates while you use Claude Code; enable local capture for each account.</p>
+        <p class="hint">Capture wraps Claude's status-line command and preserves its display. It saves only usage percentages, reset times, and observation times locally; it reads no credentials and makes no network requests. Node.js must be on PATH.</p>
+        <p class="hint">Optional API top-up (off by default) fills in an account whose capture is over 25 minutes old by reading its saved login, read-only, and asking Claude's usage API. Calls are rate-limited and backed off after HTTP 429; tokens are never refreshed.</p>
+        <div class="row claude-capture-row"><span>Claude</span><button id="btn-claude-capture" class="small-btn">Enable capture</button><button id="btn-claude-restore" class="small-btn">Undo capture</button><span id="claude-default-topup" class="api-topup-host"></span></div>
         <div id="claude-profiles-list"></div>
         <p class="hint">Undo restores the previous status line if it is unchanged. Cached readings and helper files stay on disk. Removing a profile or quitting does not undo capture; undo before removing a profile.</p>
       </div>

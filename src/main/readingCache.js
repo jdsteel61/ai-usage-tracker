@@ -3,11 +3,8 @@
 // Last successful quota readings only. Explicit field selection keeps raw
 // responses, credentials, errors, and arbitrary diagnostic notes off disk.
 const fs = require('fs');
-const path = require('path');
-const { randomUUID } = require('crypto');
-const { WINDOW_KINDS } = require('./providers/model');
-
-const CLAUDE_SOURCE_NOTE = 'From Claude Code status line';
+const { writeFileAtomic } = require('./atomicWrite');
+const { WINDOW_KINDS, CLAUDE_LOCAL_NOTE, CLAUDE_API_NOTE } = require('./providers/model');
 
 function text(value, maxLength) {
   return typeof value === 'string' ? value.slice(0, maxLength) : null;
@@ -30,21 +27,24 @@ function safeReading(id, snap) {
         resetsAt: Number.isFinite(reset) ? new Date(reset).toISOString() : null,
         periodSeconds: Number.isFinite(w.periodSeconds) && w.periodSeconds > 0 ? w.periodSeconds : null,
       };
+      // Claude windows keep their own observation time so merges stay per window.
+      if (Number.isFinite(w.observedAt) && w.observedAt >= 0 && w.observedAt <= 8.64e15) window.observedAt = w.observedAt;
       // Z.ai's web-search allowance uses these normalized numeric fields.
       for (const key of ['usedValue', 'limitValue']) {
         if (Number.isFinite(w[key]) && w[key] >= 0) window[key] = w[key];
       }
       return window;
     });
-  const local = snap.source === 'claude-statusline'
-    || (Array.isArray(snap.notes) && snap.notes.includes(CLAUDE_SOURCE_NOTE));
+  const noted = (note) => Array.isArray(snap.notes) && snap.notes.includes(note);
+  const api = snap.source === 'claude-api' || noted(CLAUDE_API_NOTE);
+  const local = !api && (snap.source === 'claude-statusline' || noted(CLAUDE_LOCAL_NOTE));
   return {
     providerId: id,
     ok: true,
     plan: text(snap.plan, 40),
     windows,
-    notes: local ? [CLAUDE_SOURCE_NOTE] : [],
-    ...(local ? { source: 'claude-statusline' } : {}),
+    notes: local ? [CLAUDE_LOCAL_NOTE] : api ? [CLAUDE_API_NOTE] : [],
+    ...(local ? { source: 'claude-statusline' } : api ? { source: 'claude-api' } : {}),
     fetchedAt: snap.fetchedAt,
     stale: true,
   };
@@ -71,23 +71,7 @@ function loadReadings(filePath, allowedIds) {
 /** Pass all configured IDs, including disabled providers, to preserve their last readings. */
 function saveReadings(filePath, readings, allowedIds) {
   const data = JSON.stringify(normalizedReadings(readings, allowedIds));
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-  let descriptor;
-  let created = false;
-  try {
-    descriptor = fs.openSync(temporaryPath, 'wx');
-    created = true;
-    fs.writeFileSync(descriptor, data, 'utf8');
-    fs.closeSync(descriptor);
-    descriptor = undefined;
-    fs.renameSync(temporaryPath, filePath);
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
-    if (created) {
-      try { fs.unlinkSync(temporaryPath); } catch { /* renamed, or cleanup unavailable */ }
-    }
-  }
+  writeFileAtomic(filePath, data);
 }
 
 module.exports = { safeReading, loadReadings, saveReadings };

@@ -153,3 +153,12 @@ test('scheduler: manual refresh queued mid-flight runs after completion', async 
   await new Promise((r) => setTimeout(r, 120));
   assert.equal(maxConcurrent, 1);
 });
+
+test('redaction: reproduction - malformed multiline or partial bearer values leave no token fragment', () => {
+  const multiline = redact('Headers.append: Bearer abc123\ndef-secret-tail\r\n  third-fragment is invalid');
+  assert.doesNotMatch(multiline, /abc123|def-secret-tail|third-fragment/);
+  assert.match(multiline, /Bearer \[REDACTED\]/);
+  assert.doesNotMatch(redact('Authorization: Bearer abc'), /abc/, 'short partial token');
+  assert.doesNotMatch(redact('token was "Bearer sk-ant-oat01-xyz",'), /oat01/);
+  assert.equal(redact('Bearer [REDACTED] stays'), 'Bearer [REDACTED] stays');
+});

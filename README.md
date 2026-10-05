@@ -6,9 +6,11 @@ profiles. It shows quota percentages, credit budgets, or key health according to
 what each provider exposes. Percentages across providers are not directly
 comparable; missing numbers are never guessed.
 
-Claude readings come from **local Claude Code status-line capture**. The tracker
-does not query Claude's OAuth usage endpoint or send prompts. Monitoring makes no
-model inference requests.
+Claude readings come from **local Claude Code status-line capture**, for every
+Claude account at once. An optional, per-account **API top-up** (off by default)
+can fill in an account whose capture has gone quiet; see
+[Claude API top-up](#claude-api-top-up). The tracker never sends prompts, and
+monitoring makes no model inference requests.
 
 ## Windows setup
 
@@ -50,7 +52,7 @@ reading freshness, for pasting elsewhere.
 | Provider | Setup | What the tracker reads |
 |---|---|---|
 | Codex | Install the Codex CLI, sign in yourself, and make `codex` available on PATH. | Starts `codex app-server` and requests `account/rateLimits/read`. The CLI manages its authentication; the tracker does not read the Codex auth file. |
-| Claude | Use Claude Code with status-line `rate_limits` support and Node.js on PATH. In Settings, choose **Enable local capture** for each account you want to capture. | Reads the local usage file written by the status-line collector. Usage may appear only after a Claude Code response, and some sessions/accounts omit these fields. |
+| Claude | Use Claude Code with status-line `rate_limits` support and Node.js on PATH. In Settings, choose **Enable capture** for each account you want to capture. Optionally tick **API top-up** for an account. | Reads the local usage file written by the status-line collector. Usage may appear only after a Claude Code response, and some sessions/accounts omit these fields. With API top-up on, it may also call `GET https://api.anthropic.com/api/oauth/usage` using that account's saved login (see below). |
 | Z.ai | Add a GLM Coding Plan API key in Settings. | `GET https://api.z.ai/api/monitor/usage/quota/limit`; only Z.ai uses the configurable Z.ai base URL. |
 | Grok | Enable it and add an xAI API key in Settings. | `GET https://api.x.ai/v1/api-key`; shows reported credit fields when available, otherwise key health and a note that usage data is unavailable. |
 | Gemini | Enable it and add a Google AI Studio API key in Settings. | `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1`; validates the key. This adapter does not measure actual Gemini usage. |
@@ -65,11 +67,48 @@ In Settings, use **Add profile** to choose another signed-in Codex home folder o
 Claude Code config folder. Each gets its own card, saved reading, and history.
 The provider checkbox controls all of that provider's profiles.
 
-Only **one Claude profile is actively watched**. Use the small linked switches on
-Claude cards or **Active Claude account** in Settings to choose it. Switching
-reads local data and does not refresh network providers. Other Claude cards show
-their last saved reading. Pausing a card does not disable its Claude Code
-collector; see [Undo Claude capture](#undo-claude-capture).
+Every enabled Claude profile is watched at the same time through its own local
+capture file. Each Claude card shows its reading source and age, such as
+`local · live` or `api · 12 min ago`. To stop capturing an account, see
+[Undo Claude capture](#undo-claude-capture).
+
+### Claude API top-up
+
+Local capture only updates while you use Claude Code with that account, so an
+idle account's reading ages. **API top-up** is an opt-in checkbox per Claude
+account (default off; enabling asks for confirmation). When on, the tracker asks
+Claude's usage endpoint only if the newest reading it holds for that account is
+missing or older than 25 minutes. A fresh local capture means zero API calls.
+
+- It reads `<Claude config folder>/.credentials.json` **read-only** and sends
+  the access token to `https://api.anthropic.com/api/oauth/usage`. It never
+  writes or refreshes credentials, and the token is not stored by the tracker.
+  The request is a usage-metadata query, not a prompt, so it uses no model quota.
+  The file must be a plain file inside that folder: symlinks and reparse points
+  are refused, as are tokens that are not plain printable ASCII.
+- Your approval is tied to the resolved credentials location shown in the
+  confirmation. If the folder later resolves somewhere else, the approval is
+  cleared and you must approve again. The profile folder can be changed only by
+  removing and re-adding the profile, never through the settings channel.
+- That endpoint rate-limits very aggressively, so calls follow a strict budget:
+  at least 10 minutes between calls per account, at most one call started per
+  minute across all accounts, and on HTTP 429 a wait of the longest of: any
+  cooldown still running, the escalation step (1, 2, then 4 hours), and the
+  server's `Retry-After` when valid (up to 24 hours), plus a little jitter. A
+  short `Retry-After` never shortens an existing wait, and the escalation eases
+  only after several successes or a long quiet period, not after one success.
+  A 401/403 marks the account **sign-in needed** and stops calls until you sign
+  in again (its credentials file changes) or a new local capture arrives. When
+  several accounts are waiting, the one with the oldest reading goes first and
+  the next attempt is scheduled for when the budget allows.
+- The budget survives restarts and is measured on a monotonic clock, so changing
+  the system clock cannot end a wait early. A call is sent only after its
+  record is saved. If the saved budget is damaged beyond recovery, or cannot be
+  saved, API top-ups pause (the card says so) while local capture carries on.
+- For each account, session and weekly independently take the newest observation
+  from local capture or the API. A failed API call never replaces a good
+  reading: the card keeps showing it as cached (not current) until a newer
+  observation arrives, and its hover explains the cooldown or sign-in problem.
 
 ## Understand reading freshness
 
@@ -80,11 +119,10 @@ source, reading age, and any error or retry detail.
 |---|---|
 | **Current** | A recent successful provider reading, or recent local Claude capture. It is a point-in-time observation. |
 | **Cached** | The last successful reading is retained after a failed request, restart, or an age limit. Its age tells you how old the numbers are. |
-| **Paused** | This Claude profile is not actively watched. Any displayed numbers are its saved reading. |
 | **Waiting** | There is no successful reading to show yet. Hover for the reason, such as missing capture, CLI, authentication, or API key. |
 
-Claude readings become cached after 15 minutes without a new observation;
-network readings become cached after two configured polling intervals. Reset
+Claude readings become cached after 15 minutes without a new observation
+(35 minutes for an API reading, because top-ups run after 25); network readings become cached after two configured polling intervals. Reset
 countdowns reaching zero do not prove usage is zero: the card needs a new
 reading. The header reports the last **panel update**, which can happen without
 a successful provider reading. A provider in rate-limit cooldown shows cached
@@ -93,9 +131,10 @@ values, or waiting if it has none; hover for the next retry time.
 Successful readings survive restarts. A provider failure does not blank other
 cards. Background polling defaults to five minutes, with jitter, timeouts,
 cancellation, and bounded retries. HTTP 429 responses pause that provider for
-15, 30, 60, then up to 120 minutes; manual refresh respects the pause. The active
-Claude file is also watched, so capture changes normally appear within about a
-second.
+15, 30, 60, then up to 120 minutes; manual refresh respects the pause. Every Claude
+capture file is also watched, so capture changes normally appear within about a
+second. Claude's API top-up has its own budget, described above, rather than
+the generic pause.
 
 The `!` marker reports a detected usage jump; hover or click it for the interval
 and increase. Thresholds are configurable. Published peak/off-peak timing is
@@ -110,8 +149,9 @@ uses sandboxing, context isolation, no Node integration, and a restrictive CSP.
 
 | Location | Contents |
 |---|---|
-| `%APPDATA%\ai-usage-tracker\settings.json` | Display/polling settings, profile labels and folder paths, active Claude profile, and window bounds. No API keys. |
+| `%APPDATA%\ai-usage-tracker\settings.json` | Display/polling settings, profile labels and folder paths, which Claude accounts have API top-up on (with the credentials location you approved), the ids already issued to profiles (so a removed profile's id is never reused), and window bounds. No API keys. An old active-Claude-profile value is ignored. |
 | `%APPDATA%\ai-usage-tracker\readings.json` | Last successful normalized readings: provider/window identifiers, plan label, percentages, reset/observation times, and selected numeric quota fields. No raw responses or arbitrary error text. Older installs may also have `claude-readings.json`. |
+| `%APPDATA%\ai-usage-tracker\claude-api-budget.json` (and `.bak`) | Claude API top-up rate budget: per-account timestamps, failure counters, and the credentials-file modification time seen at a sign-in rejection, with a one-step backup. No tokens or responses. Removing a profile deletes its entry, readings, and history. |
 | `%APPDATA%\ai-usage-tracker\history.json` | Normalized session/weekly percentages, reset times, sample times, and success/error state. Pruned to 48 hours and capped in size. |
 | `%APPDATA%\ai-usage-tracker\logs\main.log` | Diagnostics passed through a redaction filter for tokens, keys, credential fields, long blobs, and user profile paths; rotated around 512 KB. |
 | Windows Credential Manager | API keys under `ai-usage-tracker:zai-api-key`, `ai-usage-tracker:grok-api-key`, `ai-usage-tracker:gemini-api-key`, and `ai-usage-tracker:openrouter-api-key`. |
@@ -122,8 +162,9 @@ Claude capture reads and updates that profile's `settings.json` to wrap its
 `statusLine` command. It preserves other settings and forwards the original
 stdin and output to an existing status-line command. The collector receives
 Claude Code's status-line JSON in memory but saves only the usage fields above;
-it does not open transcripts or persist the full payload. It does not read
-Claude's authentication file. Existing status-line commands continue to have
+it does not open transcripts or persist the full payload. Capture itself does
+not read Claude's authentication file or use the network; only the opt-in API
+top-up reads the saved login, as described above. Existing status-line commands continue to have
 their own behavior.
 
 ### Undo Claude capture
@@ -202,7 +243,9 @@ credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - **Codex CLI not found:** confirm `codex --version` works in a normal terminal,
   then restart the tracker after changing PATH. Sign in using the CLI yourself.
 - **Claude waiting:** enable capture for the correct config folder and use
-  Claude Code normally. Missing subscription fields cannot be forced by
+  Claude Code normally, or turn on API top-up for that account. A card marked
+  sign-in needed means the usage API rejected the saved login: sign in to Claude
+  Code again. Missing subscription fields cannot be forced by
   refreshing the tracker. Project/managed status-line overrides, disabled hooks,
   or API-key billing can prevent a reading.
 - **Cached values:** inspect the status hover for reading age, error, and retry

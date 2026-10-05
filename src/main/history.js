@@ -6,7 +6,7 @@
  * timestamp, provider state. Capped and pruned (48h) so it stays small.
  */
 const fs = require('fs');
-const path = require('path');
+const { writeFileAtomic } = require('./atomicWrite');
 
 const MAX_AGE_MS = 48 * 3600_000;
 const MAX_SAMPLES_PER_WINDOW = 288; // 24h at a 5-minute cadence
@@ -53,6 +53,13 @@ class HistoryStore {
     return this.data[this.key(providerId, windowId)] || [];
   }
 
+  /** Forget every sample of one provider (profile removed). */
+  purge(providerId) {
+    for (const key of Object.keys(this.data)) {
+      if (key.startsWith(`${providerId}:`)) delete this.data[key];
+    }
+  }
+
   /** Prune old samples globally; enforce a total cap. */
   prune(now = Date.now()) {
     for (const key of Object.keys(this.data)) {
@@ -73,8 +80,7 @@ class HistoryStore {
   }
 
   save() {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data), 'utf8');
+    writeFileAtomic(this.filePath, JSON.stringify(this.data));
   }
 }
 

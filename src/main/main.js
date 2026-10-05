@@ -9,7 +9,10 @@
 const path = require('path');
 const { installCapture, restoreCapture, usagePath } = require('./claudeStatusline');
 const { watchClaudeUsage } = require('./claudeWatcher');
+const { ClaudeApiBudget } = require('./claudeApiBudget');
 const { fetchClaudeQuotas } = require('./providers/claude');
+const { reconcileClaudeReadings, orderByObservationAge } = require('./claudeMerge');
+const { canonicalCredentialPath, samePath } = require('./claudeCredentials');
 const { loadReadings, saveReadings } = require('./readingCache');
 const os = require('os');
 const {
@@ -59,42 +62,118 @@ let activeAlerts = {};
 let lastSnapshot = null; // newest reading, replayed into a rebuilt window
 let lastMerged = {};      // raw merged provider map from the last poll
 let readingsPath = null;
-let stopClaudeWatcher = null;
-let watchedClaudePath = null;
-let claudeWatchGeneration = 0;
+const claudeWatchers = new Map(); // usage.json path -> { id, active, stop }
+let claudeBudget = null;
 
 function configuredIds(s = settings.get()) {
   return [...Object.keys(s.providers), ...s.codexProfiles.map((p) => p.id),
     ...s.claudeProfiles.map((p) => p.id)];
 }
 
+/** The default account plus every added profile, each with its own config folder. */
+function claudeAccounts(s = settings.get()) {
+  return [{ id: 'claude', configDir: path.join(os.homedir(), '.claude') },
+    ...s.claudeProfiles.map((p) => ({ id: p.id, configDir: p.configDir }))];
+}
+
+/** True only while the user's approval still matches this account's canonical
+ * credentials location. If the folder now resolves elsewhere (or the opt-in
+ * predates path binding) the approval is cleared and must be given again. */
+function claudeApiAllowed(id, configDir) {
+  const s = settings.get();
+  if (s.claudeApiTopUp[id] !== true) return false;
+  const current = canonicalCredentialPath(configDir);
+  if (!current) return false; // folder unavailable: nothing is read
+  if (samePath(current, s.claudeApiApproval[id])) return true;
+  const topUp = { ...s.claudeApiTopUp };
+  const approval = { ...s.claudeApiApproval };
+  delete topUp[id];
+  delete approval[id];
+  settings.patch({ claudeApiTopUp: topUp, claudeApiApproval: approval });
+  log.warn('claude-api', `${id}: API top-up approval cleared because its credentials location changed`);
+  return false;
+}
+
+/** Local capture plus the opt-in API top-up for one account. Never throws. */
+async function readClaudeAccount(id, configDir, signal) {
+  const snap = await fetchClaudeQuotas({
+    configDir, profileId: id, signal, budget: claudeBudget, previous: lastMerged[id],
+    apiTopUp: claudeApiAllowed(id, configDir),
+  });
+  return { ...snap, providerId: id };
+}
+
+// Claude accounts are read one round at a time, oldest observation first, so
+// with many accounts none starves. A round that had to wait for the API budget
+// schedules itself again for when the budget next allows a call.
+let claudeChain = Promise.resolve();
+let claudeRetryTimer = null;
+
+function nextTopUpTime(snap) {
+  if (Number.isFinite(snap.topUpRetryAt)) return snap.topUpRetryAt;
+  return !snap.ok && snap.error && Number.isFinite(snap.error.retryAt) ? snap.error.retryAt : null;
+}
+
+function scheduleClaudeRetry(retryAt) {
+  if (claudeRetryTimer) { clearTimeout(claudeRetryTimer); claudeRetryTimer = null; }
+  if (!Number.isFinite(retryAt)) return;
+  const delay = Math.min(Math.max(1000, retryAt - Date.now()) + Math.floor(Math.random() * 5000), 2 ** 31 - 1);
+  claudeRetryTimer = setTimeout(() => {
+    claudeRetryTimer = null;
+    refreshClaudeAccounts().then((fresh) => { if (fresh) applyFreshReadings(fresh); })
+      .catch((cause) => log.warn('claude-api', cause.message));
+  }, delay);
+  if (claudeRetryTimer.unref) claudeRetryTimer.unref();
+}
+
+/** Returns { <id>: snapshot } for every enabled account, or null when canceled. */
+function refreshClaudeAccounts(signal) {
+  const run = claudeChain.then(async () => {
+    const s = settings.get();
+    if (!s.providers.claude) { scheduleClaudeRetry(null); return {}; }
+    const fresh = {};
+    let retryAt = null;
+    const accounts = claudeAccounts(s);
+    const byId = new Map(accounts.map((account) => [account.id, account]));
+    for (const id of orderByObservationAge(accounts.map((a) => a.id), lastMerged, (x) => (claudeBudget ? claudeBudget.lastAttempt(x) : -Infinity))) {
+      const snap = await readClaudeAccount(id, byId.get(id).configDir, signal);
+      if (signal && signal.aborted) return null;
+      fresh[id] = snap;
+      const at = nextTopUpTime(snap);
+      if (at !== null && (retryAt === null || at < retryAt)) retryAt = at;
+    }
+    scheduleClaudeRetry(retryAt);
+    return fresh;
+  });
+  claudeChain = run.catch(() => {});
+  return run;
+}
+
+/** Watch every enabled account's local capture file, not only one. */
 function configureClaudeWatcher() {
   const s = settings.get();
-  const profile = s.claudeProfiles.find((p) => p.id === s.claudeActiveProfile);
-  const configDir = s.claudeActiveProfile === 'claude' ? path.join(os.homedir(), '.claude')
-    : profile && profile.configDir;
-  const filePath = !IS_DEMO && s.providers.claude && configDir ? usagePath(configDir) : null;
-  if (filePath === watchedClaudePath) return;
-  if (stopClaudeWatcher) stopClaudeWatcher();
-  stopClaudeWatcher = null;
-  watchedClaudePath = filePath;
-  const generation = ++claudeWatchGeneration;
-  if (!filePath) return;
-  const id = s.claudeActiveProfile;
-  const refresh = async () => {
-    const snap = await fetchClaudeQuotas({ configDir });
-    if (generation !== claudeWatchGeneration) return;
-    const fresh = { [id]: { ...snap, providerId: id } };
-    for (const other of ['claude', ...settings.get().claudeProfiles.map((p) => p.id)]) {
-      if (other !== id) fresh[other] = { providerId: other, ok: false,
-        error: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' },
-        fetchedAt: Date.now() };
-    }
-    applyFreshReadings(fresh);
-  };
-  const update = () => refresh().catch((cause) => log.warn('claude-watch', cause.message));
-  stopClaudeWatcher = watchClaudeUsage(filePath, update);
-  update();
+  const wanted = new Map();
+  if (!IS_DEMO && s.providers.claude) {
+    for (const account of claudeAccounts(s)) wanted.set(usagePath(account.configDir), account);
+  }
+  for (const [filePath, watcher] of claudeWatchers) {
+    if (wanted.get(filePath)?.id === watcher.id) continue;
+    watcher.active = false;
+    watcher.stop();
+    claudeWatchers.delete(filePath);
+  }
+  for (const [filePath, { id, configDir }] of wanted) {
+    if (claudeWatchers.has(filePath)) continue;
+    const watcher = { id, active: true, stop: null };
+    const update = async () => {
+      const snap = await readClaudeAccount(id, configDir);
+      if (watcher.active) applyFreshReadings({ [id]: snap });
+    };
+    const safeUpdate = () => update().catch((cause) => log.warn('claude-watch', cause.message));
+    claudeWatchers.set(filePath, watcher);
+    watcher.stop = watchClaudeUsage(filePath, safeUpdate);
+    safeUpdate();
+  }
 }
 
 function main() {
@@ -125,6 +204,8 @@ function main() {
     createWindow();
     registerIpc();
 
+    claudeBudget = new ClaudeApiBudget(path.join(userData, 'claude-api-budget.json'));
+    claudeBudget.retainOnly(claudeAccounts().map((account) => account.id));
     scheduler = new Scheduler(pollProvidersOnce);
     configureClaudeWatcher();
     broadcast(lastMerged, Date.now());
@@ -148,8 +229,8 @@ function main() {
 
   app.on('before-quit', () => {
     if (scheduler) scheduler.stop(); // graceful cancellation of in-flight polls
-    if (stopClaudeWatcher) stopClaudeWatcher();
-    claudeWatchGeneration++;
+    for (const watcher of claudeWatchers.values()) { watcher.active = false; watcher.stop(); }
+    claudeWatchers.clear();
   });
 }
 
@@ -291,33 +372,26 @@ async function pollProvidersOnce(signal) {
 
   const fresh = await pollAll(registry, { signal });
   if (signal && signal.aborted) return;
-  // The local watcher may have delivered newer Claude data while network polls ran.
+  // Claude is read after the network polls and merges with the stored reading,
+  // so a poll can never replace newer watcher data with an older result.
   for (const id of claudeIds) delete fresh[id];
-  const current = settings.get();
-  if (current.providers.claude) {
-    const profile = current.claudeProfiles.find((p) => p.id === current.claudeActiveProfile);
-    const snap = await fetchClaudeQuotas({ configDir: profile && profile.configDir });
-    if (signal && signal.aborted) return;
-    fresh[current.claudeActiveProfile] = { ...snap, providerId: current.claudeActiveProfile };
-  }
-  if (current.providers.claude) {
-    for (const id of ['claude', ...current.claudeProfiles.map((p) => p.id)]) {
-      if (id !== current.claudeActiveProfile) {
-        fresh[id] = {
-          providerId: id, ok: false, fetchedAt: Date.now(),
-          error: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' },
-        };
-      }
-    }
-  }
+  const claude = await refreshClaudeAccounts(signal);
+  if (!claude || (signal && signal.aborted)) return;
+  Object.assign(fresh, claude);
   applyFreshReadings(fresh);
 }
 
-function applyFreshReadings(fresh) {
+function applyFreshReadings(freshInput) {
   const s = settings.get();
+  // Results can finish long after they were started (API calls, polls, watchers).
+  // At commit time a Claude window is replaced only by a newer observation.
+  const fresh = { ...freshInput };
+  for (const [id, snap] of Object.entries(fresh)) {
+    if (id === 'claude' || id.startsWith('claude-profile-')) fresh[id] = reconcileClaudeReadings(lastMerged[id], snap);
+  }
   for (const [id, snap] of Object.entries(fresh)) {
     if (!snap.ok) {
-      if (snap.error && snap.error.code !== 'PAUSED' && !snap.cooldown) {
+      if (snap.error && !['NO_DATA', 'QUEUED', 'SUSPENDED'].includes(snap.error.code) && !snap.cooldown) {
         log.warn('poll', `${id}: ${snap.error.code} - ${snap.error.message}`);
       }
     } else {
@@ -342,7 +416,7 @@ function applyFreshReadings(fresh) {
   for (const snap of Object.values(fresh)) {
     if (!snap.ok || snap.stale || (previousMerged[snap.providerId]?.fetchedAt === snap.fetchedAt
       && JSON.stringify(previousMerged[snap.providerId]?.windows) === JSON.stringify(snap.windows))) continue;
-    if (snap.notes?.includes('From Claude Code status line')) {
+    if (snap.source === 'claude-statusline') {
       const lastSampleAt = Math.max(0, ...['session', 'weekly'].map((kind) =>
         history.get(snap.providerId, kind).at(-1)?.t || 0));
       if (snap.fetchedAt - lastSampleAt < s.intervalMinutes * 60_000) continue;
@@ -369,6 +443,18 @@ function applyFreshReadings(fresh) {
   catch (cause) { log.warn('history', `Could not save history: ${cause.message}`); }
 
   broadcast(merged, now);
+}
+
+/** Forget everything stored for a profile id: readings, history, alerts, API budget. */
+function purgeProfileData(id) {
+  lastMerged = Object.fromEntries(Object.entries(lastMerged).filter(([key]) => key !== id));
+  activeAlerts = Object.fromEntries(Object.entries(activeAlerts).filter(([key]) => !key.startsWith(`${id}:`)));
+  history.purge(id);
+  if (claudeBudget) claudeBudget.purge(id);
+  try { saveReadings(readingsPath, lastMerged, configuredIds()); }
+  catch (cause) { log.warn('profile', `Could not save readings: ${cause.message}`); }
+  try { history.save(); }
+  catch (cause) { log.warn('history', `Could not save history: ${cause.message}`); }
 }
 
 function broadcast(merged, now) {
@@ -438,7 +524,12 @@ function registerIpc() {
     let next;
     try {
       const before = settings.get();
-      next = settings.patch(partials || {});
+      // API top-up is changed only through its confirmed claude:setApiTopUp request.
+      // Profile folders, API top-up approval and issued ids change only through
+      // their own confirmed requests, never through this generic channel.
+      const allowed = { ...partials };
+      for (const key of ['claudeApiTopUp', 'claudeApiApproval', 'usedProfileIds', 'claudeProfiles', 'codexProfiles']) delete allowed[key];
+      next = settings.patch(allowed);
       if (next.theme !== before.theme) nativeTheme.themeSource = next.theme;
       if (next.alwaysOnTop !== before.alwaysOnTop && mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.setAlwaysOnTop(next.alwaysOnTop);
@@ -482,10 +573,13 @@ function registerIpc() {
     const label = `${provider === 'codex' ? 'Codex' : 'Claude'} ${readable}`.slice(0, 40);
     const prefix = provider === 'codex' ? 'codex-profile-' : 'claude-profile-';
     const base = `${prefix}${folder.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 36) || 'extra'}`;
-    const used = new Set(profiles.map((p) => p.id));
+    // Ids are never reused, even after a profile is removed, so a new profile
+    // cannot inherit another account's saved readings, history or budget.
+    const used = new Set([...profiles.map((p) => p.id), ...settings.get().usedProfileIds]);
     let id = base;
     let suffix = 2;
     while (used.has(id)) id = `${base}-${suffix++}`;
+    purgeProfileData(id); // leftovers from before ids were tracked
     const next = settings.patch({ [settingKey]: [...profiles, { id, label, configDir }] });
     configureClaudeWatcher();
     if (provider === 'codex' && scheduler) scheduler.refreshNow();
@@ -500,6 +594,14 @@ function registerIpc() {
     const settingKey = provider === 'codex' ? 'codexProfiles' : provider === 'claude' ? 'claudeProfiles' : null;
     if (!settingKey) return { ...settings.get() };
     const next = settings.patch({ [settingKey]: settings.get()[settingKey].filter((p) => p.id !== profileId) });
+    if (!next[settingKey].some((p) => p.id === profileId)) {
+      const topUp = { ...next.claudeApiTopUp };
+      const approval = { ...next.claudeApiApproval };
+      delete topUp[profileId];
+      delete approval[profileId];
+      settings.patch({ claudeApiTopUp: topUp, claudeApiApproval: approval });
+      purgeProfileData(profileId);
+    }
     configureClaudeWatcher();
     if (provider === 'codex' && scheduler) scheduler.refreshNow();
     broadcast(lastMerged, Date.now());
@@ -514,7 +616,7 @@ function registerIpc() {
     const confirmation = await dialog.showMessageBox(mainWindow, {
       type: 'question', buttons: ['Cancel', 'Enable capture'], defaultId: 0, cancelId: 0,
       message: 'Enable local Claude capture?',
-      detail: `Claude config folder: ${configDir}\n\nThis wraps the statusLine command in settings.json and backs up the previous field in ai-usage-tracker/original-statusline.json. Its existing display receives the same input and keeps working. The tracker saves only usage percentages, reset times, and observation times locally. It does not read Claude credentials, send prompts, or query the OAuth usage endpoint. Node.js must be on PATH. Undo capture in Settings restores the previous field.`,
+      detail: `Claude config folder: ${configDir}\n\nThis wraps the statusLine command in settings.json and backs up the previous field in ai-usage-tracker/original-statusline.json. Its existing display receives the same input and keeps working. The tracker saves only usage percentages, reset times, and observation times locally. Capture itself reads no Claude credentials, sends no prompts, and makes no network requests (the separate, off-by-default API top-up setting is what may read a saved login). Node.js must be on PATH. Undo capture in Settings restores the previous field.`,
     });
     if (confirmation.response !== 1) return { ok: false, canceled: true };
     try {
@@ -524,6 +626,34 @@ function registerIpc() {
     } catch (cause) {
       return { ok: false, error: cause.message };
     }
+  });
+
+  ipcMain.handle('claude:setApiTopUp', async (_e, id, enabled) => {
+    if (IS_DEMO) return { ok: false, error: 'Claude API top-up is disabled in demo mode' };
+    const account = claudeAccounts().find((a) => a.id === id);
+    if (!account) return { ok: false, error: 'Unknown Claude profile' };
+    const credentialPath = enabled ? canonicalCredentialPath(account.configDir) : null;
+    if (enabled && !credentialPath) return { ok: false, error: 'That Claude config folder could not be found' };
+    if (enabled) {
+      const confirmation = await dialog.showMessageBox(mainWindow, {
+        type: 'question', buttons: ['Cancel', 'Enable API top-up'], defaultId: 0, cancelId: 0,
+        message: 'Allow Claude usage API top-up?',
+        detail: `Claude config folder: ${account.configDir}
+Credentials file: ${credentialPath}
+
+Only when this account's local reading is missing or older than 25 minutes, the tracker reads the access token from .credentials.json in that folder and sends it to https://api.anthropic.com/api/oauth/usage to fetch usage percentages. It never writes or refreshes credentials, sends prompts, or uses model quota. That endpoint rate-limits aggressively, so calls are budgeted: at least 10 minutes per account, staggered across accounts, and backed off for hours after HTTP 429 or a sign-in rejection. This approval applies only to the credentials file shown above: if that folder later resolves elsewhere, it is cleared. Turn this off at any time in Settings.`,
+      });
+      if (confirmation.response !== 1) return { ok: false, canceled: true };
+    }
+    const current = { ...settings.get().claudeApiTopUp };
+    const approval = { ...settings.get().claudeApiApproval };
+    if (enabled) { current[id] = true; approval[id] = credentialPath; } else { delete current[id]; delete approval[id]; }
+    const next = settings.patch({ claudeApiTopUp: current, claudeApiApproval: approval });
+    if (enabled && settings.get().providers.claude) {
+      readClaudeAccount(id, account.configDir).then((snap) => applyFreshReadings({ [id]: snap }))
+        .catch((cause) => log.warn('claude-api', cause.message));
+    }
+    return { ok: true, settings: { ...next } };
   });
 
   ipcMain.handle('claude:restoreCapture', async (_e, id) => {
@@ -734,19 +864,6 @@ async function runSettingsSelftest() {
         await new Promise((r) => setTimeout(r, 1500));
         copyRestored = btnCopy.textContent === icon0 && btnCopy.title.includes('Copy');
       } catch { copyOk = false; }
-      const switches = [...document.querySelectorAll('.claude-toggle')];
-      let accountSwitchOk = true;
-      if (switches.length > 1) {
-        const original = switches.findIndex((button) => button.getAttribute('aria-checked') === 'true');
-        switches.find((button) => button.getAttribute('aria-checked') === 'false').click();
-        await new Promise((r) => setTimeout(r, 300));
-        const changed = [...document.querySelectorAll('.claude-toggle')];
-        accountSwitchOk = changed.filter((button) => button.getAttribute('aria-checked') === 'true').length === 1
-          && changed[original].getAttribute('aria-checked') === 'false'
-          && changed[original].closest('.card').dataset.readingState === 'paused';
-        changed[original].click();
-        await new Promise((r) => setTimeout(r, 300));
-      }
       return {
         waited,
         menuOpened,
@@ -781,7 +898,7 @@ async function runSettingsSelftest() {
         toastPresent: !!document.getElementById('toast'),
         freshnessVisible: [...document.querySelectorAll('.card')].every((card) => {
           const status = card.querySelector('.reading-status');
-          return status && ['current', 'cached', 'paused', 'waiting'].includes(status.textContent)
+          return status && ['current', 'cached', 'waiting'].includes(status.textContent)
             && status.getAttribute('data-tip').includes('Source:');
         }),
         freshnessHover: (() => {
@@ -791,10 +908,7 @@ async function runSettingsSelftest() {
           const tip = document.getElementById('tooltip');
           return tip.classList.contains('show') && tip.textContent.includes('Reading age:');
         })(),
-        switchesStayQuiet: [...document.querySelectorAll('.claude-toggle')].every((button) =>
-          !button.hasAttribute('title') && !button.hasAttribute('data-tip')),
         captureUndoVisible: !!document.getElementById('btn-claude-restore'),
-        accountSwitchOk,
         readingStates: [...document.querySelectorAll('.card')].map((card) =>
           card.dataset.providerId + ':' + card.dataset.readingState),
       };
@@ -805,8 +919,7 @@ async function runSettingsSelftest() {
     const ok = result.waited && result.menuOpened && result.opened && result.closedAfterDone
       && result.displayAfterDone === 'none' && result.copyOk && result.copyRestored
       && result.copyTwiceOk && result.menuCopyOk && result.toastPresent && result.peakBadge
-      && result.freshnessVisible && result.freshnessHover && result.switchesStayQuiet && result.captureUndoVisible
-      && result.accountSwitchOk;
+      && result.freshnessVisible && result.freshnessHover && result.captureUndoVisible;
     log.info('selftest', ok ? 'PASS' : 'FAIL');
     app.exit(ok ? 0 : 1);
   } catch (cause) {

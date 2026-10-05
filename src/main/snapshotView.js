@@ -8,6 +8,7 @@
 const { providerHasSpike, describeAlert } = require('./spikes');
 const { formatAge } = require('./format');
 const { getZaiPeakState } = require('./peak');
+const { CLAUDE_LOCAL_NOTE, CLAUDE_API_NOTE } = require('./providers/model');
 
 const TITLES = { codex: 'Codex', claude: 'Claude', zai: 'Z.ai', grok: 'Grok', gemini: 'Gemini', openrouter: 'OpenRouter' };
 const ORDER = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter'];
@@ -62,7 +63,8 @@ function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
     stale: !!snap.stale,
     fetchedAt: snap.fetchedAt,
     staleAgeLabel: snap.stale && snap.ok ? formatAge(snap.fetchedAt, now) : null,
-    source: snap.source || (Array.isArray(snap.notes) && snap.notes.includes('From Claude Code status line') ? 'claude-statusline' : null),
+    source: snap.source || (Array.isArray(snap.notes) && snap.notes.includes(CLAUDE_LOCAL_NOTE) ? 'claude-statusline'
+      : Array.isArray(snap.notes) && snap.notes.includes(CLAUDE_API_NOTE) ? 'claude-api' : null),
     error: snap.error || (snap.lastError || null),
     notes: Array.isArray(snap.notes) ? snap.notes : [],
     windows: byKind,
@@ -82,15 +84,7 @@ function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now() }
   const ids = [ORDER[0], ...codexProfiles.map((p) => p.id), ORDER[1], ...profiles.map((p) => p.id), ...ORDER.slice(2)];
   const titles = { ...TITLES, ...Object.fromEntries([...codexProfiles, ...profiles].map((p) => [p.id, p.label])) };
   const providers = ids.map((id) => {
-    const inactiveClaude = settings && settings.providers.claude !== false
-      && (id === 'claude' || id.startsWith('claude-profile-'))
-      && id !== (settings.claudeActiveProfile || 'claude');
-    const stored = (merged || {})[id];
-    const snap = inactiveClaude && stored && stored.ok
-      ? { ...stored, stale: true, lastError: { code: 'PAUSED', message: 'Not monitoring this Claude account; showing its last reading' } }
-      : inactiveClaude
-        ? { providerId: id, ok: false, error: { code: 'PAUSED', message: 'No local reading yet' } }
-        : stored;
+    const snap = (merged || {})[id];
     return shapeProvider(id, snap, {
       enabled: settings ? (id.startsWith('claude-profile-') ? settings.providers.claude !== false
         : id.startsWith('codex-profile-') ? settings.providers.codex !== false : settings.providers[id] !== false) : true,
@@ -100,7 +94,6 @@ function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now() }
   }).map((provider) => ({ ...provider, title: titles[provider.id] || provider.title }));
   return {
     now,
-    claudeActiveProfile: settings ? settings.claudeActiveProfile || 'claude' : 'claude',
     clock24: settings ? settings.clock24 !== false : true,
     percentMode: settings ? settings.percentMode : 'used',
     providers,

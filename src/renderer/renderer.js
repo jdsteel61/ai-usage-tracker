@@ -219,31 +219,6 @@
       spike.addEventListener('click', () => showToast(p.spike.description));
       head.appendChild(spike);
     }
-    if (isClaude) {
-      const active = p.id === (snapshot.claudeActiveProfile || 'claude');
-      const accounts = snapshot.providers.filter((account) => account.enabled
-        && (account.id === 'claude' || account.id.startsWith('claude-profile-')));
-      if (accounts.length > 1) {
-        const toggle = document.createElement('button');
-        toggle.className = 'claude-toggle';
-        toggle.type = 'button';
-        toggle.setAttribute('role', 'switch');
-        toggle.setAttribute('aria-checked', String(active));
-        toggle.setAttribute('aria-label', `Monitor ${p.title}`);
-        toggle.addEventListener('click', async () => {
-          const next = active ? accounts.find((account) => account.id !== p.id).id : p.id;
-          const switches = cards.querySelectorAll('.claude-toggle');
-          switches.forEach((button) => { button.disabled = true; });
-          try {
-            settings = await window.tracker.saveSettings({ claudeActiveProfile: next });
-            renderActiveClaudeSelect();
-            render({ ...snapshot, claudeActiveProfile: settings.claudeActiveProfile });
-          } catch { showToast('Could not switch Claude account'); }
-          finally { switches.forEach((button) => { button.disabled = false; }); }
-        });
-        head.appendChild(toggle);
-      }
-    }
     const indicator = document.createElement('span');
     indicator.className = 'reading-status';
     head.appendChild(indicator);
@@ -254,7 +229,7 @@
       const err = document.createElement('div');
       err.className = 'card-error';
       err.textContent = isClaude
-        ? (p.error?.code === 'PAUSED' ? 'No saved reading' : 'Waiting for usage')
+        ? 'Waiting for usage'
         : p.error && p.error.message ? p.error.message : 'Unavailable';
       if (isClaude) err.setAttribute('data-tip', p.error?.message || 'Use Claude Code to capture usage');
       err.title = p.error && p.error.code ? `code: ${p.error.code}` : '';
@@ -274,23 +249,28 @@
       }
       // Providers with no quota windows at all (e.g. Gemini) show notes only.
       for (const note of p.notes || []) {
-        if (isClaude && note === 'From Claude Code status line') continue;
+        if (isClaude && (note === 'From Claude Code status line' || note === 'From Claude usage API')) continue;
         const n = document.createElement('div');
         n.className = 'card-note';
         n.textContent = note;
         card.appendChild(n);
       }
     }
+    if (isClaude) {
+      const source = document.createElement('div');
+      source.className = 'card-source';
+      card.appendChild(source);
+    }
     return card;
   }
 
   function updateReadingStatus(card, p) {
-    const active = !(p.id === 'claude' || p.id.startsWith('claude-profile-'))
-      || p.id === (snapshot.claudeActiveProfile || 'claude');
     const status = window.AITRACKER_SUMMARY.readingStatus(p, {
       now: Date.now(), intervalMinutes: settings?.intervalMinutes || 5,
-      active, hour24: settings?.clock24 !== false,
+      hour24: settings?.clock24 !== false,
     });
+    const sourceEl = card.querySelector('.card-source');
+    if (sourceEl) sourceEl.textContent = p.ok ? window.AITRACKER_SUMMARY.sourceLabel(p, Date.now()) : '';
     const indicator = card.querySelector('.reading-status');
     indicator.className = `reading-status ${status.state}`;
     indicator.textContent = status.label;
@@ -519,7 +499,7 @@
     document.getElementById('set-zai-url').value = settings.zaiBaseUrl;
     renderSubscriptionProfiles('codex', settings.codexProfiles || []);
     renderSubscriptionProfiles('claude', settings.claudeProfiles || []);
-    renderActiveClaudeSelect();
+    renderDefaultApiTopUp();
     await refreshKeyStatuses();
   }
 
@@ -538,7 +518,6 @@
       remove.addEventListener('click', async () => {
         settings = await window.tracker.removeSubscriptionProfile(provider, profile.id);
         renderSubscriptionProfiles(provider, settings[`${provider}Profiles`] || []);
-        if (provider === 'claude') renderActiveClaudeSelect();
         window.tracker.refresh();
       });
       row.append(name, remove);
@@ -553,21 +532,37 @@
         restore.textContent = 'Undo capture';
         restore.addEventListener('click', () => restoreCapture(profile.id, restore));
         row.insertBefore(restore, remove);
+        row.insertBefore(apiTopUpLabel(profile.id), remove);
       }
       host.appendChild(row);
     }
   }
 
-  function renderActiveClaudeSelect() {
-    const select = document.getElementById('set-claude-active');
-    select.replaceChildren();
-    for (const profile of [{ id: 'claude', label: 'Claude' }, ...(settings.claudeProfiles || [])]) {
-      const option = document.createElement('option');
-      option.value = profile.id;
-      option.textContent = profile.label;
-      select.appendChild(option);
-    }
-    select.value = settings.claudeActiveProfile || 'claude';
+  /** Opt-in checkbox; the main process asks for confirmation before enabling. */
+  function apiTopUpLabel(id) {
+    const label = document.createElement('label');
+    label.className = 'api-topup';
+    label.title = 'When local capture is over 25 minutes old, read this profile\'s saved login (read-only) and ask the Claude usage API. Rate-budgeted; never refreshes tokens.';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!(settings.claudeApiTopUp && settings.claudeApiTopUp[id]);
+    box.addEventListener('change', async () => {
+      box.disabled = true;
+      try {
+        const result = await window.tracker.setClaudeApiTopUp(id, box.checked);
+        if (result.ok) settings = result.settings;
+        else if (!result.canceled) showToast(result.error || 'Could not change API top-up');
+        box.checked = !!(settings.claudeApiTopUp && settings.claudeApiTopUp[id]);
+      } catch { showToast('Could not change API top-up'); }
+      finally { box.disabled = false; }
+    });
+    label.append(box, ' API top-up');
+    return label;
+  }
+
+  function renderDefaultApiTopUp() {
+    const host = document.getElementById('claude-default-topup');
+    host.replaceChildren(apiTopUpLabel('claude'));
   }
 
   async function enableCapture(id, button) {
@@ -598,7 +593,6 @@
       if (result.ok) {
         settings = result.settings;
         renderSubscriptionProfiles(provider, settings[`${provider}Profiles`] || []);
-        if (provider === 'claude') renderActiveClaudeSelect();
         window.tracker.refresh();
       } else if (!result.canceled) {
         showToast(result.error || `Could not add ${provider} profile`);
@@ -611,7 +605,6 @@
     for (const id of PROVIDER_IDS) providers[id] = document.getElementById(`set-prov-${id}`).checked;
     return window.tracker.saveSettings({
       providers,
-      claudeActiveProfile: document.getElementById('set-claude-active').value,
       intervalMinutes: Number(document.getElementById('set-interval').value),
       percentMode: document.getElementById('set-percentmode').value,
       clock24: document.getElementById('set-clock').value === '24',

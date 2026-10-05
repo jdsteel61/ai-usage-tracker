@@ -337,33 +337,9 @@ html, body {
 .row input[type="number"] { width: 56px; }
 .row input[type="url"], .row input[type="password"] { width: 160px; }
 .row select { width: 104px; }
-/* Quiet account switches; source and age details live in the status tooltip. */
-.claude-toggle {
-  position: relative;
-  width: 24px;
-  height: 13px;
-  flex: 0 0 24px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bar-track);
-  cursor: pointer;
-}
-.claude-toggle::after {
-  content: '';
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  top: 1px;
-  left: 1px;
-  border-radius: 50%;
-  background: var(--muted);
-  transition: transform 120ms ease;
-}
-.claude-toggle[aria-checked="true"] { background: #0f766e; border-color: #0f766e; }
-.claude-toggle[aria-checked="true"]::after { transform: translateX(11px); background: #fff; }
-.claude-toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-.claude-toggle:disabled { opacity: 0.5; cursor: wait; }
+.card-source { margin-top: 2px; font-size: 9px; color: var(--muted); }
+.api-topup { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; white-space: nowrap; }
+.api-topup input { margin: 0; }
 .row input[type="number"], .row input[type="url"], .row input[type="password"], .row select {
   background: var(--card);
   color: var(--text);

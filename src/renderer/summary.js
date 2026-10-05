@@ -53,24 +53,38 @@
   }
 
   /** Reading state at display time, including time spent asleep or idle. */
-  function readingStatus(p, { now = Date.now(), intervalMinutes = 5, active = true, hour24 = true } = {}) {
-    const local = p.source === 'claude-statusline' || (p.notes || []).includes('From Claude Code status line')
-      || p.id === 'claude' || (p.id || '').startsWith('claude-profile-');
+  function isClaudeApi(p) {
+    return p.source === 'claude-api' || (p.notes || []).includes('From Claude usage API');
+  }
+
+  /** Short card line: source and age, e.g. 'local \u00b7 live' or 'api \u00b7 12 min ago'. */
+  function sourceLabel(p, now = Date.now()) {
+    const api = isClaudeApi(p);
+    const minutes = Number.isFinite(p.fetchedAt) ? Math.floor(Math.max(0, now - p.fetchedAt) / 60_000) : null;
+    if (minutes === null) return api ? 'api' : 'local';
+    const age = minutes < 60 ? `${minutes} min ago` : `${Math.floor(minutes / 60)} h ${minutes % 60} min ago`;
+    if (!api && minutes < 2) return 'local \u00b7 live';
+    return `${api ? 'api' : 'local'} \u00b7 ${age}`;
+  }
+
+  function readingStatus(p, { now = Date.now(), intervalMinutes = 5, hour24 = true } = {}) {
+    const api = isClaudeApi(p);
+    const local = !api && (p.source === 'claude-statusline' || (p.notes || []).includes('From Claude Code status line')
+      || p.id === 'claude' || (p.id || '').startsWith('claude-profile-'));
     const age = p.ok ? readingAge(p.fetchedAt, now) : null;
-    const limit = (local ? 15 : 2 * intervalMinutes) * 60_000;
+    const limit = (api ? 35 : local ? 15 : 2 * intervalMinutes) * 60_000;
     const expired = Object.values(p.windows || {}).some((w) => w && Date.parse(w.resetsAt) <= now);
     const stale = p.stale || (p.ok && Number.isFinite(p.fetchedAt) && now - p.fetchedAt > limit) || expired;
-    const state = !active || p.error?.code === 'PAUSED' ? 'paused'
-      : !p.ok ? 'waiting' : stale ? 'cached' : 'current';
+    const state = !p.ok ? 'waiting' : stale ? 'cached' : 'current';
     const lines = [
-      state === 'paused' ? 'Paused: this Claude account is not being watched'
-        : state === 'cached' ? 'Cached: showing the last saved reading'
-          : state === 'waiting' ? 'Waiting: no successful reading yet'
+      state === 'cached' ? 'Cached: showing the last saved reading'
+        : state === 'waiting' ? 'Waiting: no successful reading yet'
+          : api ? 'Current: recent usage from the Claude usage API'
             : local ? 'Current: recent usage captured from Claude Code' : 'Current: last provider check succeeded',
-      local ? 'Source: local Claude Code status line; use Claude Code to update' : 'Source: provider metadata check',
+      api ? 'Source: Claude usage API (opt-in top-up; used when local capture is over 25 minutes old)'
+        : local ? 'Source: local Claude Code status line; use Claude Code to update' : 'Source: provider metadata check',
       age ? `Reading age: ${age}` : '',
       p.ok && Number.isFinite(p.fetchedAt) ? `Observed: ${new Date(p.fetchedAt).toLocaleString('en-US', { hour12: !hour24 })}` : '',
-      state === 'paused' ? (p.ok ? 'Showing its saved reading; select its switch to watch' : 'No saved reading; select its switch to watch') : '',
       expired ? 'Reset passed: the displayed percentage belongs to the previous window' : '',
       p.error?.message || '',
       Number.isFinite(p.error?.retryAt) && p.error.retryAt > now
@@ -83,10 +97,9 @@
     const labels = [];
     const error = p.error || {};
     const status = readingStatus(p, { now, hour24, intervalMinutes });
-    if (error.code === 'PAUSED') labels.push('paused account');
-    else if (status.state === 'cached') labels.push('stale');
-    const local = p.source === 'claude-statusline' || (p.notes || []).includes('From Claude Code status line');
-    if (local) labels.push('local Claude Code reading');
+    if (status.state === 'cached') labels.push('stale');
+    if (isClaudeApi(p)) labels.push('Claude usage API reading');
+    else if (p.source === 'claude-statusline' || (p.notes || []).includes('From Claude Code status line')) labels.push('local Claude Code reading');
     if (p.ok) {
       const age = readingAge(p.fetchedAt, now);
       if (age) labels.push(`reading ${age}`);
@@ -133,7 +146,7 @@
     return lines.join('\n');
   }
 
-  const api = { buildUsageSummary, resetLabel, readingStatus };
+  const api = { buildUsageSummary, resetLabel, readingStatus, sourceLabel };
   global.AITRACKER_SUMMARY = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -10,6 +10,10 @@
  */
 const WINDOW_KINDS = ['session', 'weekly', 'other'];
 
+/** Claude reading provenance, carried in snapshot notes so cached readings keep it. */
+const CLAUDE_LOCAL_NOTE = 'From Claude Code status line';
+const CLAUDE_API_NOTE = 'From Claude usage API';
+
 /**
  * Clamp a raw percentage into [0, 100]. Returns null for unknown/unusable
  * values so the UI can render '—' instead of inventing a number.
@@ -54,6 +58,8 @@ function findWindow(snapshot, kind) {
 
 module.exports = {
   WINDOW_KINDS,
+  CLAUDE_LOCAL_NOTE,
+  CLAUDE_API_NOTE,
   clampPercent,
   okSnapshot,
   errorSnapshot,

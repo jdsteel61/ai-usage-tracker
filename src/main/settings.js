@@ -7,7 +7,7 @@
  * are rejected so a secret can never leak into this file.
  */
 const fs = require('fs');
-const path = require('path');
+const { writeFileAtomic } = require('./atomicWrite');
 
 const MIN_INTERVAL_MINUTES = 1;
 const MAX_INTERVAL_MINUTES = 1440;
@@ -16,7 +16,9 @@ const DEFAULTS = Object.freeze({
   providers: { codex: true, claude: true, zai: true, grok: false, gemini: false, openrouter: false },
   codexProfiles: [],
   claudeProfiles: [], // extra config directories; usage comes from local status-line caches
-  claudeActiveProfile: 'claude',
+  claudeApiTopUp: {}, // { <profile id>: true } opt-in API top-up; absent means off
+  claudeApiApproval: {}, // { <profile id>: canonical credentials path the user approved }
+  usedProfileIds: [], // every added-profile id ever issued, so a removed id is never reused
   intervalMinutes: 5,
   percentMode: 'used', // 'used' | 'remaining'
   alwaysOnTop: true,
@@ -41,7 +43,7 @@ function clampNumber(value, min, max, fallback) {
 }
 
 function sanitize(raw) {
-  const out = { ...DEFAULTS };
+  const out = { ...DEFAULTS, providers: { ...DEFAULTS.providers } }; // never alias the shared defaults
   if (!raw || typeof raw !== 'object') return out;
 
   if (raw.providers && typeof raw.providers === 'object') {
@@ -65,8 +67,19 @@ function sanitize(raw) {
       return [{ id, label, configDir }];
     });
   }
-  if (raw.claudeActiveProfile === 'claude' || out.claudeProfiles.some((p) => p.id === raw.claudeActiveProfile)) {
-    out.claudeActiveProfile = raw.claudeActiveProfile;
+  // Old settings may carry claudeActiveProfile; it is not a known key any more and is dropped.
+  if (raw.claudeApiTopUp && typeof raw.claudeApiTopUp === 'object') {
+    for (const id of ['claude', ...out.claudeProfiles.map((p) => p.id)]) {
+      if (raw.claudeApiTopUp[id] === true) out.claudeApiTopUp = { ...out.claudeApiTopUp, [id]: true };
+    }
+  }
+  if (raw.claudeApiApproval && typeof raw.claudeApiApproval === 'object') {
+    for (const id of ['claude', ...out.claudeProfiles.map((p) => p.id)]) {
+      const approved = raw.claudeApiApproval[id];
+      if (typeof approved === 'string' && approved.length > 0 && approved.length <= 1024) {
+        out.claudeApiApproval = { ...out.claudeApiApproval, [id]: approved };
+      }
+    }
   }
   if (Array.isArray(raw.codexProfiles)) {
     const seenIds = new Set();
@@ -84,6 +97,9 @@ function sanitize(raw) {
       return [{ id, label, configDir }];
     });
   }
+  const retired = Array.isArray(raw.usedProfileIds) ? raw.usedProfileIds : [];
+  out.usedProfileIds = [...new Set([...retired, ...out.claudeProfiles.map((p) => p.id), ...out.codexProfiles.map((p) => p.id)]
+    .filter((id) => typeof id === 'string' && /^(claude|codex)-profile-[a-z0-9-]{1,64}$/.test(id)))].slice(-1000);
   if (raw.intervalMinutes !== undefined) out.intervalMinutes = clampNumber(raw.intervalMinutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES, DEFAULTS.intervalMinutes);
   if (raw.percentMode === 'remaining') out.percentMode = 'remaining';
   if (typeof raw.alwaysOnTop === 'boolean') out.alwaysOnTop = raw.alwaysOnTop;
@@ -149,10 +165,7 @@ class SettingsStore {
   }
 
   save() {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.values, null, 2), 'utf8');
-    fs.renameSync(tmp, this.filePath);
+    writeFileAtomic(this.filePath, JSON.stringify(this.values, null, 2));
   }
 }
 
