@@ -337,7 +337,7 @@ html, body {
 .row input[type="number"] { width: 56px; }
 .row input[type="url"], .row input[type="password"] { width: 160px; }
 .row select { width: 104px; }
-.card-source { margin-top: 2px; font-size: 9px; color: var(--muted); }
+.card-source { font-size: 8.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .api-topup { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; white-space: nowrap; }
 .api-topup input { margin: 0; }
 .row input[type="number"], .row input[type="url"], .row input[type="password"], .row select {

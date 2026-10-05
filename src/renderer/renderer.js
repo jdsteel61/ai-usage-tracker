@@ -202,6 +202,11 @@
       badge.setAttribute('data-tip', lines.join('\n'));
       head.appendChild(badge);
     }
+    if (isClaude) {
+      const source = document.createElement('span');
+      source.className = 'card-source';
+      head.appendChild(source);
+    }
     const spacer = document.createElement('span');
     spacer.className = 'spacer';
     head.appendChild(spacer);
@@ -255,11 +260,6 @@
         n.textContent = note;
         card.appendChild(n);
       }
-    }
-    if (isClaude) {
-      const source = document.createElement('div');
-      source.className = 'card-source';
-      card.appendChild(source);
     }
     return card;
   }
