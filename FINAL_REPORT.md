@@ -327,3 +327,42 @@ spike alert is + the specific event. Also fixed along the way: the v1.4.0
 spike toast change had been silently dropped by a failed multi-edit batch
 (window.alert was still live). E2E selftest now asserts tooltipShown /
 tooltipRight / tooltipTz. 119/119 tests, lint clean, instance swapped.
+
+## v1.6.0 - every Claude account, always current, without API bans
+
+Problem: the v1.4 API-only poll hit `/api/oauth/usage` 429s (that endpoint
+rate-limits aggressively and sometimes sends no Retry-After), and the v1.5
+local-only fix watched just one "active" Claude profile, leaving every other
+account frozen on a saved reading.
+
+Now: local status-line capture is watched for ALL enabled Claude profiles at
+once (the active-profile switch and the Paused state are gone), and an
+OPT-IN per-profile API top-up fills gaps. The top-up (Settings checkbox,
+off by default, confirmed once per account) only calls the endpoint when the
+newest reading is more than 25 minutes old, so an account in daily use makes
+no calls. The token is read-only and never refreshed or written. Rate budget
+(src/main/claudeApiBudget.js, state persisted in claude-api-budget.json):
+>=10 min between calls per account, one call started per minute across all
+accounts, accounts served oldest-reading-first, 429 backoff of
+max(remaining cooldown, 1h/2h/4h escalation, Retry-After up to 24h) + jitter
+that a single success does not reset, and fail-closed (top-ups suspended,
+local capture continues) if the budget file is corrupt or unwritable.
+Session and weekly windows each take their own newest observation across
+local and API sources; a late response never overwrites a newer reading;
+a reading kept after a failed top-up is marked cached. Cards show source and
+age (`local - live`, `api - 12 min ago`).
+
+Hardening from three adversarial reviews (gpt-6.1-sol): approval is bound to
+the canonical credentials path and cleared if it changes; the settings IPC
+cannot repoint profiles or flip the opt-in; credentials that are symlinks or
+resolve outside the profile folder are refused; tokens are syntax-checked and
+transport errors never reach snapshots or logs; persisted files use
+random-temp `wx` atomic writes; profile ids are never reused and removing a
+profile purges its reading, history, alerts and budget entry. Live-checked
+against the real endpoint with two Max accounts: both 200, no Retry-After,
+payload shape as expected.
+
+Upgrade notes: re-tick API top-up once per account (the old opt-in is not
+honoured because approval is now path-bound). Model-specific weekly limits
+from the pre-v1.5 API adapter are not carried over; only 5-hour and weekly
+windows are shown. 233/233 tests, lint clean, demo screenshot self-test OK.
