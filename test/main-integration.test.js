@@ -176,15 +176,16 @@ test('main: every enabled Claude account is watched at once, without network pol
   app.registerIpc();
   app.configureClaudeWatcher();
   await flush();
-  assert.equal(app.watchers.length, 2);
+  assert.equal(app.watchers.length, 4);
   assert.ok(app.watchers.every((w) => !w.stopped));
   assert.ok(app.watchers.some((w) => w.file.includes('work')));
+  assert.equal(app.watchers.filter((w) => w.file.endsWith('.credentials.json')).length, 2); // a refreshed login lifts an auth block
   assert.ok(readDirs.includes('C:/fake/work'));
   assert.equal(app.getMerged()[WORK].windows[0].usedPercent, 10);
   assert.equal(app.getMerged().claude.windows[0].usedPercent, 10);
   assert.equal(app.getMerged().claude.lastError, undefined);
   app.configureClaudeWatcher(); // idempotent
-  assert.equal(app.watchers.length, 2);
+  assert.equal(app.watchers.length, 4);
   assert.equal(app.refreshCount(), 0);
   assert.equal(app.pollCount(), 0);
 });
@@ -194,7 +195,7 @@ test('main: disabling Claude or removing a profile stops only the affected watch
   app.registerIpc();
   app.configureClaudeWatcher();
   app.handles.get('subscription-profile:remove')({}, 'claude', WORK);
-  assert.deepEqual(app.watchers.map((w) => w.stopped), [false, true]);
+  assert.deepEqual(app.watchers.map((w) => w.stopped), [false, false, true, true]);
   app.handles.get('settings:patch')({}, { providers: { ...app.settings.get().providers, claude: false } });
   assert.ok(app.watchers.every((w) => w.stopped));
 });

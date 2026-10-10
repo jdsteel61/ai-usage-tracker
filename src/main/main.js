@@ -95,9 +95,9 @@ function claudeApiAllowed(id, configDir) {
 }
 
 /** Local capture plus the opt-in API top-up for one account. Never throws. */
-async function readClaudeAccount(id, configDir, signal) {
+async function readClaudeAccount(id, configDir, signal, force = false) {
   const snap = await fetchClaudeQuotas({
-    configDir, profileId: id, signal, budget: claudeBudget, previous: lastMerged[id],
+    configDir, profileId: id, signal, budget: claudeBudget, previous: lastMerged[id], force,
     apiTopUp: claudeApiAllowed(id, configDir),
   });
   return { ...snap, providerId: id };
@@ -127,7 +127,7 @@ function scheduleClaudeRetry(retryAt) {
 }
 
 /** Returns { <id>: snapshot } for every enabled account, or null when canceled. */
-function refreshClaudeAccounts(signal) {
+function refreshClaudeAccounts(signal, force = false) {
   const run = claudeChain.then(async () => {
     const s = settings.get();
     if (!s.providers.claude) { scheduleClaudeRetry(null); return {}; }
@@ -136,7 +136,7 @@ function refreshClaudeAccounts(signal) {
     const accounts = claudeAccounts(s);
     const byId = new Map(accounts.map((account) => [account.id, account]));
     for (const id of orderByObservationAge(accounts.map((a) => a.id), lastMerged, (x) => (claudeBudget ? claudeBudget.lastAttempt(x) : -Infinity))) {
-      const snap = await readClaudeAccount(id, byId.get(id).configDir, signal);
+      const snap = await readClaudeAccount(id, byId.get(id).configDir, signal, force);
       if (signal && signal.aborted) return null;
       fresh[id] = snap;
       const at = nextTopUpTime(snap);
@@ -171,7 +171,12 @@ function configureClaudeWatcher() {
     };
     const safeUpdate = () => update().catch((cause) => log.warn('claude-watch', cause.message));
     claudeWatchers.set(filePath, watcher);
-    watcher.stop = watchClaudeUsage(filePath, safeUpdate);
+    const stopUsage = watchClaudeUsage(filePath, safeUpdate);
+    // A refreshed or re-entered login lifts an auth block: retry right away
+    // instead of waiting for the next poll.
+    const credPath = canonicalCredentialPath(configDir);
+    const stopCreds = credPath ? watchClaudeUsage(credPath, safeUpdate) : () => {};
+    watcher.stop = () => { stopUsage(); stopCreds(); };
     safeUpdate();
   }
 }
@@ -320,7 +325,7 @@ function rebuildTrayMenu(fill = 0) {
   tray.setImage(nativeImage.createFromBuffer(drawGauge(16, fill), { scaleFactor: 1 }));
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Show / Hide', click: () => { if (mainWindow && mainWindow.isVisible()) mainWindow.hide(); else showMainWindow(); } },
-    { label: 'Refresh now', click: () => { scheduler && scheduler.refreshNow(); } },
+    { label: 'Refresh now', click: () => { requestManualRefresh(); } },
     { type: 'separator' },
     { label: 'Always on top', type: 'checkbox', checked: s.alwaysOnTop, click: (item) => ipcMain.emit('set-always-on-top', {}, item.checked) },
     { label: 'Launch at login', type: 'checkbox', checked: s.launchAtLogin, click: (item) => setLaunchAtLogin(item.checked) },
@@ -331,7 +336,18 @@ function rebuildTrayMenu(fill = 0) {
 
 // ---------------------------------------------------------------- polling
 
+// Set by a manual refresh (button or tray); the next poll consumes it and asks
+// the Claude API for fresh usage regardless of how recent the cached reading is.
+let manualRefreshPending = false;
+
+function requestManualRefresh() {
+  manualRefreshPending = true;
+  if (scheduler) scheduler.refreshNow();
+}
+
 async function pollProvidersOnce(signal) {
+  const forceClaude = manualRefreshPending;
+  manualRefreshPending = false;
   log.debug('poll', 'poll starting');
   if (IS_DEMO) {
     const fixturePath = process.env.AITRACKER_DEMO_FIXTURE
@@ -375,7 +391,7 @@ async function pollProvidersOnce(signal) {
   // Claude is read after the network polls and merges with the stored reading,
   // so a poll can never replace newer watcher data with an older result.
   for (const id of claudeIds) delete fresh[id];
-  const claude = await refreshClaudeAccounts(signal);
+  const claude = await refreshClaudeAccounts(signal, forceClaude);
   if (!claude || (signal && signal.aborted)) return;
   Object.assign(fresh, claude);
   applyFreshReadings(fresh);
@@ -773,6 +789,7 @@ Only when this account's local reading is missing or older than 25 minutes, the 
   ipcMain.on('refresh', () => {
     log.debug('ipc', 'refresh requested');
     if (scheduler) {
+      manualRefreshPending = true;
       const fired = scheduler.refreshNow();
       log.debug('ipc', `refreshNow fired: ${fired} (inFlight=${scheduler.inFlight}, queued=${scheduler.manualQueued})`);
     }

@@ -24,6 +24,7 @@ const fs = require('fs');
 const { writeFileAtomic } = require('./atomicWrite');
 
 const MIN_INTERVAL_MS = 10 * 60_000;
+const FORCE_MIN_INTERVAL_MS = 60_000; // manual refresh: per-profile spacing
 const STAGGER_MS = 60_000;
 const BACKOFF_MS = [60 * 60_000, 2 * 60 * 60_000, 4 * 60 * 60_000];
 const MAX_RETRY_AFTER_MS = 24 * 60 * 60_000;
@@ -199,7 +200,7 @@ class ClaudeApiBudget {
 
   /** `state`: { credMtimeMs, localAt } describing the profile's current inputs.
    * Returns { ok: true } or { ok: false, reason: 'suspended'|'auth'|'cooldown'|'interval'|'stagger', retryAt }. */
-  check(id, { credMtimeMs = null, localAt = 0 } = {}) {
+  check(id, { credMtimeMs = null, localAt = 0 } = {}, { force = false } = {}) {
     const mono = this.mono();
     if (this.unsaved && !this.save()) return { ok: false, reason: 'suspended', retryAt: null };
     const blocked = this.remaining(this.blockUntilMono);
@@ -213,8 +214,13 @@ class ClaudeApiBudget {
     }
     const cooling = this.remaining(e.untilMono);
     if (cooling > 0) return { ok: false, reason: 'cooldown', retryAt: this.now() + cooling };
-    if (this.isBusy(e, mono)) return { ok: false, reason: 'interval', retryAt: this.now() + MIN_INTERVAL_MS - (mono - e.lastMono) };
-    if (this.lastStartMono !== null && mono - this.lastStartMono < STAGGER_MS) {
+    // A user-requested refresh only needs the shorter spacing and skips the
+    // cross-profile stagger; cooldowns, auth blocks and suspension still apply.
+    const interval = force ? FORCE_MIN_INTERVAL_MS : MIN_INTERVAL_MS;
+    if (e.lastMono !== null && mono - e.lastMono < interval) {
+      return { ok: false, reason: 'interval', retryAt: this.now() + interval - (mono - e.lastMono) };
+    }
+    if (!force && this.lastStartMono !== null && mono - this.lastStartMono < STAGGER_MS) {
       return { ok: false, reason: 'stagger', retryAt: this.now() + STAGGER_MS - (mono - this.lastStartMono) };
     }
     return { ok: true };
@@ -305,6 +311,6 @@ function parseRetryAfter(value, now = Date.now()) {
 }
 
 module.exports = {
-  ClaudeApiBudget, parseRetryAfter, MIN_INTERVAL_MS, STAGGER_MS, BACKOFF_MS, MAX_RETRY_AFTER_MS,
+  ClaudeApiBudget, parseRetryAfter, MIN_INTERVAL_MS, FORCE_MIN_INTERVAL_MS, STAGGER_MS, BACKOFF_MS, MAX_RETRY_AFTER_MS,
   SUCCESSES_TO_EASE, QUIET_EASE_MS, UNRECOVERABLE_BLOCK_MS, MAX_ENTRIES,
 };

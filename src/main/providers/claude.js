@@ -169,7 +169,7 @@ async function topUpFromApi(deps, localAt) {
   if (!auth || !auth.token) return errorSnapshot('claude', 'NO_AUTH', 'Claude sign-in needed: no saved login in this profile');
   const state = { credMtimeMs: auth.mtimeMs, localAt };
   const withRetry = (snap, retryAt) => (Number.isFinite(retryAt) ? { ...snap, error: { ...snap.error, retryAt } } : snap);
-  const verdict = budget.check(id, state);
+  const verdict = budget.check(id, state, { force: !!deps.force });
   if (!verdict.ok) {
     if (verdict.reason === 'auth') return errorSnapshot('claude', 'NO_AUTH', 'Claude sign-in needed: sign in to Claude Code again');
     if (verdict.reason === 'suspended') {
@@ -189,7 +189,7 @@ async function topUpFromApi(deps, localAt) {
   return snap;
 }
 
-/** `deps`: { configDir, profileId, apiTopUp, budget, previous (last stored reading),
+/** `deps`: { configDir, profileId, apiTopUp, budget, force (manual refresh), previous (last stored reading),
  * fetchImpl, now, signal, readFileSync, credentialFs, usagePath }. Session and
  * weekly each take the newest observation across local capture, the previous
  * reading, and a fresh API reading. A failed API call never replaces a good
@@ -199,7 +199,7 @@ async function fetchClaudeQuotas(deps = {}) {
   const local = readLocalClaude(deps, now);
   const previous = deps.previous && deps.previous.ok ? deps.previous : null;
   let best = mergeClaudeReadings([previous, local], now);
-  const needsTopUp = !best || now - best.fetchedAt > API_TOPUP_AFTER_MS
+  const needsTopUp = !!deps.force || !best || now - best.fetchedAt > API_TOPUP_AFTER_MS
     || best.windows.some((w) => w.kind !== 'other' && Date.parse(w.resetsAt) <= now);
   let apiError = null;
   if (deps.apiTopUp && deps.budget && needsTopUp) {

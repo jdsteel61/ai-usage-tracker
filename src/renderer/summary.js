@@ -98,7 +98,7 @@
         const r = resetLabel(w.resetsAt, now, hour24);
         return `  ${name} ${Math.round(w.usedPercent)}% used${r ? ` (resets ${r})` : ''}`;
       })] : []),
-      p.error?.message || '',
+      p.error?.message || (state === 'cached' ? p.lastError?.message : '') || '',
       Number.isFinite(p.error?.retryAt) && p.error.retryAt > now
         ? `Rate limited; next retry ${resetLabel(new Date(p.error.retryAt).toISOString(), now, hour24)}. Refresh respects this pause.` : '',
     ].filter(Boolean);
