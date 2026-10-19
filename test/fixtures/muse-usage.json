@@ -1,0 +1,8 @@
+{
+  "usage": {
+    "tier": "plus",
+    "window": { "usedPercent": 37, "resetsAtMs": 1792453200000, "windowDurationMins": 300 },
+    "weekly": { "usedPercent": 12, "resetsAtMs": 1792886400000 },
+    "observedAtMs": 1792448000000
+  }
+}

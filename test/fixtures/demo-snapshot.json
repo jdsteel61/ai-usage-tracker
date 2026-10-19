@@ -33,5 +33,17 @@
     ],
     "notes": [],
     "fetchedAt": 0
+  },
+  "muse": {
+    "providerId": "muse",
+    "ok": true,
+    "plan": "plus",
+    "windows": [
+      { "id": "muse:window", "kind": "session", "label": "5 hr", "usedPercent": 37, "resetsAt": null, "periodSeconds": 18000 },
+      { "id": "muse:weekly", "kind": "weekly", "label": "Week", "usedPercent": 12, "resetsAt": null, "periodSeconds": 604800 }
+    ],
+    "notes": ["From Muse local host"],
+    "fetchedAt": 0,
+    "source": "muse-serve"
   }
 }

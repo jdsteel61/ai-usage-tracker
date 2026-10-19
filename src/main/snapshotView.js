@@ -10,8 +10,8 @@ const { formatAge } = require('./format');
 const { getZaiPeakState } = require('./peak');
 const { CLAUDE_LOCAL_NOTE, CLAUDE_API_NOTE } = require('./providers/model');
 
-const TITLES = { codex: 'Codex', claude: 'Claude', zai: 'Z.ai', grok: 'Grok', gemini: 'Gemini', openrouter: 'OpenRouter' };
-const ORDER = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter'];
+const TITLES = { codex: 'Codex', claude: 'Claude', zai: 'Z.ai', grok: 'Grok', gemini: 'Gemini', openrouter: 'OpenRouter', muse: 'Muse' };
+const ORDER = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter', 'muse'];
 
 /** Providers with a known published peak/off-peak schedule. Extending
  *  peak support to another provider is one entry here + an adapter. */

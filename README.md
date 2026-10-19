@@ -1,7 +1,7 @@
 # AI Usage Tracker
 
-A compact Windows tray app for **Codex, Claude Code, Z.ai, Grok, Gemini, and
-OpenRouter**, with separate cards for additional Codex and Claude subscription
+A compact Windows tray app for **Codex, Claude Code, Z.ai, Grok, Gemini,
+OpenRouter, and Muse**, with separate cards for additional Codex and Claude subscription
 profiles. It shows quota percentages, credit budgets, or key health according to
 what each provider exposes. Percentages across providers are not directly
 comparable; missing numbers are never guessed.
@@ -57,6 +57,7 @@ reading freshness, for pasting elsewhere.
 | Grok | Enable it and add an xAI API key in Settings. | `GET https://api.x.ai/v1/api-key`; shows reported credit fields when available, otherwise key health and a note that usage data is unavailable. |
 | Gemini | Enable it and add a Google AI Studio API key in Settings. | `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1`; validates the key. This adapter does not measure actual Gemini usage. |
 | OpenRouter | Enable it and add an OpenRouter API key in Settings. | `GET https://openrouter.ai/api/v1/key`, plus `/api/v1/credits` when needed for prepaid balances. Credit budgets do not have a reset countdown. |
+| Muse | Install Muse, sign in yourself (`muse login`), and enable Muse in Settings. | Starts `muse serve` and requests `usage/read` (initialize handshake, no session, no turn). Shows the 5-hour-class and weekly subscription percentages and tier when the Muse host has observed them; otherwise the card honestly waits (see below). |
 
 Codex, Claude, and Z.ai are enabled by default; the other providers are optional.
 All four API keys are stored in Windows Credential Manager. Storing, testing,
@@ -254,6 +255,13 @@ credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
   or API-key billing can prevent a reading.
 - **Cached values:** inspect the status hover for reading age, error, and retry
   time. Refresh cannot bypass a provider's rate-limit pause.
+- **Muse waiting:** Muse reports subscription usage only to its own
+  session host while that host makes model calls; it saves no usage reading
+  to disk and offers no usage endpoint, and the tracker never makes a model
+  call to measure usage. The Muse card therefore shows a real reading only
+  once a Muse host has observed one, and otherwise waits. Readings keep
+  Muse's own observation time, so an older observation is shown as cached
+  with its real age rather than as current.
 - **Key valid without percentages:** Gemini measures key health only; Grok
   usage depends on fields returned by xAI. Consult the provider's own dashboard.
 - **Missing quota rows:** the compact panel renders session and weekly/credit

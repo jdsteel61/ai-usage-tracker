@@ -13,7 +13,7 @@ const MIN_INTERVAL_MINUTES = 1;
 const MAX_INTERVAL_MINUTES = 1440;
 
 const DEFAULTS = Object.freeze({
-  providers: { codex: true, claude: true, zai: true, grok: false, gemini: false, openrouter: false },
+  providers: { codex: true, claude: true, zai: true, grok: false, gemini: false, openrouter: false, muse: false },
   codexProfiles: [],
   claudeProfiles: [], // extra config directories; usage comes from local status-line caches
   claudeApiTopUp: {}, // { <profile id>: true } opt-in API top-up; absent means off

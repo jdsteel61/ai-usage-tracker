@@ -27,9 +27,9 @@ const getKey = async () => 'test-key-1234567890';
 
 // ---- registry ----
 
-test('registry includes all six providers', () => {
+test('registry includes all seven providers', () => {
   const ids = createRegistry().map((p) => p.id);
-  assert.deepEqual(ids, ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter']);
+  assert.deepEqual(ids, ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter', 'muse']);
 });
 
 // ---- settings schema ----
@@ -39,6 +39,7 @@ test('settings: new providers default off and accept booleans', () => {
   assert.equal(def.providers.grok, false);
   assert.equal(def.providers.gemini, false);
   assert.equal(def.providers.openrouter, false);
+  assert.equal(def.providers.muse, false);
   assert.equal(def.providers.codex, true);
   const patched = sanitize({ providers: { grok: true, openrouter: true } });
   assert.equal(patched.providers.grok, true);

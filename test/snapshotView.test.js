@@ -31,7 +31,7 @@ test('shapeSnapshot: failing provider without windows array does not throw', () 
     zai: { providerId: 'zai', ok: false, error: { code: 'NO_KEY', message: 'no key' }, fetchedAt: NOW },
   };
   const view = shapeSnapshot(merged, { settings: { ...DEFAULTS }, activeAlerts: {}, now: NOW });
-  assert.equal(view.providers.length, 6);
+  assert.equal(view.providers.length, 7);
   const codex = view.providers.find((p) => p.id === 'codex');
   assert.equal(codex.ok, false);
   assert.deepEqual(codex.windows, { session: null, weekly: null });
@@ -109,7 +109,7 @@ test('shapeSnapshot: active alert produces spike description on the provider', (
 
 test('shapeSnapshot: empty merged map never throws (fresh boot, settings patch)', () => {
   const view = shapeSnapshot({}, { settings: { ...DEFAULTS }, activeAlerts: {}, now: NOW });
-  assert.equal(view.providers.length, 6);
+  assert.equal(view.providers.length, 7);
   assert.ok(view.providers.every((p) => p.ok === false));
   assert.equal(view.providers.find((p) => p.id === 'codex').error.code, 'WAITING');
 });

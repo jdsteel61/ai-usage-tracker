@@ -479,7 +479,7 @@
   // ---- settings overlay ----
 
   const panel = document.getElementById('settings-panel');
-  const PROVIDER_IDS = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter'];
+  const PROVIDER_IDS = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter', 'muse'];
 
   async function loadSettingsIntoUI() {
     settings = await window.tracker.getSettings();

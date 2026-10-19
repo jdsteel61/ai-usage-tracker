@@ -17,6 +17,7 @@ const { fetchZaiQuotas } = require('./zai');
 const { fetchGrokQuotas } = require('./grok');
 const { fetchGeminiQuotas } = require('./gemini');
 const { fetchOpenRouterQuotas } = require('./openrouter');
+const { fetchMuseQuotas } = require('./muse');
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const RETRYABLE = new Set(['TIMEOUT', 'NETWORK', 'EXIT', 'RPC', 'HTTP_5xx']);
@@ -231,6 +232,7 @@ function createRegistry({ zaiDeps = {}, grokDeps = {}, geminiDeps = {}, openrout
     { id: 'grok', title: 'Grok', fetchQuotas: (deps) => fetchGrokQuotas(adapterDeps(deps, grokDeps)) },
     { id: 'gemini', title: 'Gemini', fetchQuotas: (deps) => fetchGeminiQuotas(adapterDeps(deps, geminiDeps)) },
     { id: 'openrouter', title: 'OpenRouter', fetchQuotas: (deps) => fetchOpenRouterQuotas(adapterDeps(deps, openrouterDeps)) },
+    { id: 'muse', title: 'Muse', fetchQuotas: (deps) => fetchMuseQuotas(deps) },
   ];
 }
 
