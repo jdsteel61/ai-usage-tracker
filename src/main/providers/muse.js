@@ -7,14 +7,16 @@
  * newline-delimited JSON-RPC) and its `usage/read` method, which returns
  * the host's last-observed subscription usage: the 5-hour-class window and
  * the rolling weekly window as provider percentages, plus the tier.
- * This is a metadata-only query:
- * - no inference request is made (no session is started, no turn is run),
- * - Muse's credential file is never read or written by us; the CLI
- *   handles its own auth internally,
- * - a fresh host has observed nothing, so `usage/read` may legitimately
+ * - Background polls are metadata-only: no session is started and no turn
+ *   is run. Muse's credential file is never read or written by us; the
+ *   CLI handles its own auth internally.
+ * - A fresh host has observed nothing, so `usage/read` may legitimately
  *   return no usage member. That is reported as NO_DATA (Waiting), never
  *   as invented numbers. Readings keep the host's `observedAtMs` stamp,
  *   so an old observation is shown with its real age and goes cached.
+ * - Only when the user presses Refresh (`force`), the host runs one tiny
+ *   prompt so the provider's usage frame reaches it, then reads usage.
+ *   That single user-initiated prompt is the tracker's only inference.
  *
  * Windows note: `muse` on PATH is a `.cmd` launcher shim, and Node refuses
  * to spawn `.cmd`/`.bat` directly (EINVAL, CVE-2024-27980 hardening). The
@@ -23,14 +25,34 @@
  */
 const { spawn } = require('child_process');
 const readline = require('readline');
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { clampPercent, okSnapshot, errorSnapshot } = require('./model');
 const { windowKindForDuration, windowLabel } = require('./codex');
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const FORCED_TIMEOUT_MS = 90_000;
 const SERVE_ARGS = ['serve', '--no-session-log'];
-const NO_DATA_MESSAGE = 'Muse has not reported subscription usage yet (it reports usage to its own session host during model calls; the tracker makes none)';
+const NO_DATA_MESSAGE = 'Muse has not reported subscription usage yet (press Refresh and the tracker will run one tiny Muse prompt to read it)';
+const TINY_PROMPT = 'Reply only: OK';
+
+/** UUIDv7 (MSP command ids must be UUIDv7; the host refuses anything else). */
+function uuidv7(randomBytes = crypto.randomBytes) {
+  const b = randomBytes(16);
+  const t = BigInt(Date.now());
+  b[0] = Number((t >> 40n) & 0xffn);
+  b[1] = Number((t >> 32n) & 0xffn);
+  b[2] = Number((t >> 24n) & 0xffn);
+  b[3] = Number((t >> 16n) & 0xffn);
+  b[4] = Number((t >> 8n) & 0xffn);
+  b[5] = Number(t & 0xffn);
+  b[6] = (b[6] & 0x0f) | 0x70;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
 
 /** Epoch milliseconds -> ISO, or null for unusable values. */
 function msToIso(ms) {
@@ -88,7 +110,9 @@ function normalizeMuseUsage(result, now = Date.now()) {
   if (!windows.length) return errorSnapshot('muse', 'NO_DATA', NO_DATA_MESSAGE);
   const observed = Number(usage.observedAtMs);
   const fetchedAt = Number.isFinite(observed) && observed > 0 ? Math.min(observed, now) : now;
-  const plan = typeof usage.tier === 'string' && usage.tier ? usage.tier.slice(0, 40) : null;
+  // Tier ids are opaque (a long numeric id on current builds); only a
+  // human-readable tier name is worth showing as the plan label.
+  const plan = typeof usage.tier === 'string' && /[A-Za-z]/.test(usage.tier) ? usage.tier.slice(0, 40) : null;
   return {
     ...okSnapshot('muse', { plan, windows, notes: ['From Muse local host'], fetchedAt }),
     source: 'muse-serve',
@@ -173,11 +197,19 @@ function resolveMuseTarget(env = process.env, deps = {}) {
 
 /**
  * Transport: spawn `muse serve`, run initialize -> initialized ->
- * usage/read, normalize. Starts no session and runs no turn, so it makes
- * no model call. `deps` is injectable for tests: { spawnImpl, target }.
+ * usage/read, normalize. By default this starts no session and runs no
+ * turn, so it makes no model call, and a fresh host reports NO_DATA.
+ *
+ * With `deps.force` (the user pressed Refresh), the host first runs ONE
+ * tiny prompt ("Reply only: OK", reasoning effort none, memory-only
+ * session in a temp workspace) so the provider's usage frame reaches this
+ * host, then reads usage. That is the only inference the tracker ever
+ * makes, and only on an explicit user refresh. `deps` is injectable for
+ * tests: { spawnImpl, target, force, prompt, workspaceRoot }.
  */
 async function fetchMuseQuotas(deps = {}) {
   const { spawnImpl = spawn, signal } = deps;
+  const force = !!deps.force;
   if (signal && signal.aborted) return errorSnapshot('muse', 'ABORTED', 'Muse poll aborted');
   const resolved = deps.target || (typeof deps.resolveTarget === 'function'
     ? deps.resolveTarget()
@@ -235,7 +267,7 @@ async function fetchMuseQuotas(deps = {}) {
     const fail = (code, message) => finish(errorSnapshot('muse', code, message));
     const abort = () => fail('ABORTED', 'Muse poll aborted');
 
-    timer = setTimeout(() => fail('TIMEOUT', 'Muse host timed out'), REQUEST_TIMEOUT_MS);
+    timer = setTimeout(() => fail('TIMEOUT', 'Muse host timed out'), force ? FORCED_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
 
     child.on('error', (cause) => {
       fail('NO_CLI', cause.code === 'ENOENT' ? 'Muse not found' : `Could not start Muse: ${cause.message}`);
@@ -254,27 +286,65 @@ async function fetchMuseQuotas(deps = {}) {
     };
     child.on('exit', onExit);
 
+    const rpcFail = (error) => {
+      const msgText = (error && error.message) || 'Muse host request failed';
+      const noAuth = /auth|log[ -]?in|credential/i.test(msgText);
+      fail(noAuth ? 'NO_AUTH' : 'RPC', msgText);
+    };
+    let usageRequested = false;
+    const readUsage = (id) => {
+      if (usageRequested) return;
+      usageRequested = true;
+      send({ jsonrpc: '2.0', id, method: 'usage/read' });
+    };
+
     lines.on('line', (line) => {
       let message;
       try { message = JSON.parse(line); } catch { return; }
 
       if (message.id === 0) {
-        if (message.error) {
-          fail('RPC', message.error.message || 'Muse host request failed');
-          return;
-        }
+        if (message.error) { rpcFail(message.error); return; }
         send({ jsonrpc: '2.0', method: 'initialized', params: {} });
-        send({ jsonrpc: '2.0', id: 1, method: 'usage/read' });
+        if (force) {
+          send({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'session/start',
+            params: { commandId: uuidv7(), workspaceRoot: deps.workspaceRoot || os.tmpdir() },
+          });
+        } else {
+          readUsage(1);
+        }
         return;
       }
-      if (message.id === 1) {
-        if (message.error) {
-          const msgText = message.error.message || 'Muse host request failed';
-          const noAuth = /auth|log[ -]?in|credential/i.test(msgText);
-          fail(noAuth ? 'NO_AUTH' : 'RPC', msgText);
-          return;
-        }
+      if (force && message.id === 1) {
+        if (message.error) { rpcFail(message.error); return; }
+        const sessionId = message.result && message.result.session && message.result.session.sessionId;
+        if (!sessionId) { fail('RPC', 'Muse host returned no session'); return; }
+        send({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'turn/start',
+          params: {
+            commandId: uuidv7(),
+            sessionId,
+            reasoningEffort: 'none',
+            input: [{ type: 'text', text: deps.prompt || TINY_PROMPT }],
+          },
+        });
+        return;
+      }
+      if (force && message.id === 2) {
+        if (message.error) rpcFail(message.error);
+        return; // turn accepted; completion arrives as a notification
+      }
+      if (message.id === (force ? 3 : 1)) {
+        if (message.error) { rpcFail(message.error); return; }
         finish(normalizeMuseUsage(message.result || {}));
+        return;
+      }
+      if (force && (message.method === 'turn/completed' || message.method === 'usage/changed')) {
+        readUsage(3);
       }
     });
 
@@ -293,5 +363,5 @@ async function fetchMuseQuotas(deps = {}) {
 
 module.exports = {
   fetchMuseQuotas, normalizeMuseUsage, resolveMuseTarget, resolveMuseCommand,
-  findInstalledMuseExe, parseMuseBinName, NO_DATA_MESSAGE,
+  findInstalledMuseExe, parseMuseBinName, NO_DATA_MESSAGE, TINY_PROMPT, uuidv7,
 };

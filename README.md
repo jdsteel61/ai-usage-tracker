@@ -9,8 +9,10 @@ comparable; missing numbers are never guessed.
 Claude readings come from **local Claude Code status-line capture**, for every
 Claude account at once. An optional, per-account **API top-up** (off by default)
 can fill in an account whose capture has gone quiet; see
-[Claude API top-up](#claude-api-top-up). The tracker never sends prompts, and
-monitoring makes no model inference requests.
+[Claude API top-up](#claude-api-top-up). Monitoring makes no model inference
+requests, with one deliberate exception: for Muse, pressing **Refresh** runs
+a single tiny prompt so Muse's local host can report real subscription
+usage (see Troubleshooting). Nothing runs automatically.
 
 ## Windows setup
 
@@ -57,7 +59,7 @@ reading freshness, for pasting elsewhere.
 | Grok | Enable it and add an xAI API key in Settings. | `GET https://api.x.ai/v1/api-key`; shows reported credit fields when available, otherwise key health and a note that usage data is unavailable. |
 | Gemini | Enable it and add a Google AI Studio API key in Settings. | `GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=1`; validates the key. This adapter does not measure actual Gemini usage. |
 | OpenRouter | Enable it and add an OpenRouter API key in Settings. | `GET https://openrouter.ai/api/v1/key`, plus `/api/v1/credits` when needed for prepaid balances. Credit budgets do not have a reset countdown. |
-| Muse | Install Muse, sign in yourself (`muse login`), and enable Muse in Settings. | Starts `muse serve` and requests `usage/read` (initialize handshake, no session, no turn). Shows the 5-hour-class and weekly subscription percentages and tier when the Muse host has observed them; otherwise the card honestly waits (see below). |
+| Muse | Install Muse, sign in yourself (`muse login`), and enable Muse in Settings. | Starts `muse serve` and requests `usage/read`. Background polls run no model call, so they usually wait; pressing **Refresh** runs one tiny prompt ("Reply only: OK", reasoning effort none, memory-only session) through the tracker host so it can report your real 5-hour and weekly subscription percentages (see below). |
 
 Codex, Claude, and Z.ai are enabled by default; the other providers are optional.
 All four API keys are stored in Windows Credential Manager. Storing, testing,
@@ -255,13 +257,16 @@ credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
   or API-key billing can prevent a reading.
 - **Cached values:** inspect the status hover for reading age, error, and retry
   time. Refresh cannot bypass a provider's rate-limit pause.
-- **Muse waiting:** Muse reports subscription usage only to its own
-  session host while that host makes model calls; it saves no usage reading
-  to disk and offers no usage endpoint, and the tracker never makes a model
-  call to measure usage. The Muse card therefore shows a real reading only
-  once a Muse host has observed one, and otherwise waits. Readings keep
-  Muse's own observation time, so an older observation is shown as cached
-  with its real age rather than as current.
+- **Muse waiting / refresh:** Muse reports subscription usage only to
+  its own session host while that host makes model calls; it saves no usage
+  reading to disk and offers no usage endpoint. Background polls therefore
+  wait (and keep the last reading as cached, with its real age). Pressing
+  **Refresh** runs one tiny prompt through the tracker's own Muse host —
+  "Reply only: OK" at reasoning effort none, in a memory-only session that
+  is never saved — so the host receives a real usage frame and the card can
+  show your current 5-hour and weekly percentages. That prompt consumes a
+  negligible amount of subscription usage and is the only model call the
+  tracker ever makes; it never runs automatically.
 - **Key valid without percentages:** Gemini measures key health only; Grok
   usage depends on fields returned by xAI. Consult the provider's own dashboard.
 - **Missing quota rows:** the compact panel renders session and weekly/credit

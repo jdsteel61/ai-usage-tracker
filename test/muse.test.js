@@ -68,8 +68,10 @@ test('muse: a non-5h-class window is not relabelled as the session window', () =
   assert.ok(findWindow(snap, 'weekly'));
 });
 
-/** Minimal fake `muse serve` child: answers initialize, then usage/read. */
-function fakeMuseServe(result) {
+/** Minimal fake `muse serve` child: answers initialize, then usage/read.
+ * Records every method received in `seen` (when given). Answers
+ * session/start + turn/start too, emitting turn/completed. */
+function fakeMuseServe(result, seen) {
   return () => {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
@@ -86,8 +88,15 @@ function fakeMuseServe(result) {
         buf = buf.slice(idx + 1);
         if (!line.trim()) continue;
         const msg = JSON.parse(line);
+        if (msg.method && seen) seen.push(msg.method);
         if (msg.method === 'initialize') {
           child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { serverInfo: { name: 'muse', version: '0' } } })}\n`);
+        } else if (msg.method === 'session/start') {
+          child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { session: { sessionId: 's1' }, viewCursor: '' } })}\n`);
+        } else if (msg.method === 'turn/start') {
+          if (seen) seen.push(`turn:${msg.params.input[0].text}:${msg.params.reasoningEffort}`);
+          child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`);
+          setImmediate(() => child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'turn/completed', params: {} })}\n`));
         } else if (msg.method === 'usage/read') {
           child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`);
         }
@@ -98,12 +107,42 @@ function fakeMuseServe(result) {
 }
 
 test('muse: fetch runs initialize -> usage/read over the serve host, no model call', async () => {
+  const seen = [];
   const snap = await fetchMuseQuotas({
-    spawnImpl: fakeMuseServe(FIX('muse-usage.json')),
+    spawnImpl: fakeMuseServe(FIX('muse-usage.json'), seen),
     target: { exe: 'muse-fake', args: [] },
   });
   assert.equal(snap.ok, true);
   assert.equal(findWindow(snap, 'session').usedPercent, 37);
+  assert.ok(!seen.includes('session/start'), 'background poll starts no session');
+  assert.ok(!seen.includes('turn/start'), 'background poll runs no turn');
+});
+
+test('muse: forced fetch runs one tiny turn, then reads real usage', async () => {
+  const seen = [];
+  const snap = await fetchMuseQuotas({
+    spawnImpl: fakeMuseServe(FIX('muse-usage.json'), seen),
+    target: { exe: 'muse-fake', args: [] },
+    force: true,
+  });
+  assert.equal(snap.ok, true);
+  assert.equal(findWindow(snap, 'session').usedPercent, 37);
+  assert.equal(findWindow(snap, 'weekly').usedPercent, 12);
+  assert.ok(seen.includes('session/start'));
+  assert.ok(seen.some((m) => m === 'turn:Reply only: OK:none'), 'one tiny prompt at effort none');
+});
+
+test('muse: opaque numeric tier id is not shown as a plan name', () => {
+  const snap = normalizeMuseUsage({
+    usage: {
+      tier: '27681631238169137',
+      window: { usedPercent: 17, resetsAtMs: 1792461840000, windowDurationMins: 300 },
+      weekly: { usedPercent: 5, resetsAtMs: 1792972800000 },
+      observedAtMs: 1792448000000,
+    },
+  });
+  assert.equal(snap.ok, true);
+  assert.equal(snap.plan, null);
 });
 
 test('muse: fetch maps an empty usage/read result to NO_DATA', async () => {

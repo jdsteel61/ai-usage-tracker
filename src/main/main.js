@@ -337,7 +337,8 @@ function rebuildTrayMenu(fill = 0) {
 // ---------------------------------------------------------------- polling
 
 // Set by a manual refresh (button or tray); the next poll consumes it and asks
-// the Claude API for fresh usage regardless of how recent the cached reading is.
+// the Claude API for fresh usage regardless of how recent the cached reading
+// is, and lets Muse run one tiny prompt so its host can report real usage.
 let manualRefreshPending = false;
 
 function requestManualRefresh() {
@@ -347,6 +348,7 @@ function requestManualRefresh() {
 
 async function pollProvidersOnce(signal) {
   const forceClaude = manualRefreshPending;
+  const force = manualRefreshPending;
   manualRefreshPending = false;
   log.debug('poll', 'poll starting');
   if (IS_DEMO) {
@@ -386,7 +388,10 @@ async function pollProvidersOnce(signal) {
     openrouterDeps: { getKey: getKeyFor('ai-usage-tracker:openrouter-api-key') },
   }).filter((p) => enabled.includes(p.id));
 
-  const fresh = await pollAll(registry, { signal });
+  // A manual refresh also lets Muse run one tiny prompt so its host can
+  // report real usage (see providers/muse.js); that turn is the only poll
+  // allowed to take longer than the default provider timeout.
+  const fresh = await pollAll(registry, { signal, force, timeoutMs: force ? 90_000 : undefined });
   if (signal && signal.aborted) return;
   // Claude is read after the network polls and merges with the stored reading,
   // so a poll can never replace newer watcher data with an older result.
