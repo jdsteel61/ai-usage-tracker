@@ -27,7 +27,9 @@ function reading(id, percent, fetchedAt = Date.now()) {
 /** Run the actual main-process functions with an unsuccessful instance lock.
  * That skips app startup naturally. All account reads, polls, watches, and
  * cache writes are mocked; history and snapshot shaping use production code. */
-function harness({ poll = async () => ({}), local = () => reading('claude', 10), confirmResponse = 0, demo = false, pick = null } = {}) {
+function harness({ poll = async () => ({}), local = () => reading('claude', 10), verify = async () => ({ ok: true,
+  identity: { accountId: '11111111-1111-4111-8111-111111111111', organizationId: null, email: 'one@example.com', source: 'api' },
+  credentialMtimeMs: 1000, verifiedAt: Date.now() }), confirmResponse = 0, demo = false, pick = null } = {}) {
   const handles = new Map();
   const watchers = [];
   const saves = [];
@@ -37,6 +39,7 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10),
   const dialogs = [];
   const captureChanges = [];
   const credentialAttempts = [];
+  const verificationAttempts = [];
   const loginChanges = [];
   const timers = [];
   const canonical = {}; // config folder -> canonical credentials path (null: folder missing)
@@ -61,7 +64,9 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10),
       }])),
     },
     './providers': { ...providers, pollAll: async (...args) => { pollCount++; return poll(...args); } },
-    './providers/claude': { fetchClaudeQuotas: async (deps) => local(deps) },
+    './providers/claude': { fetchClaudeQuotas: async (deps) => local(deps),
+      verifyClaudeAccount: async (deps) => { verificationAttempts.push(deps); return verify(deps); } },
+    './claudeIdentity': { readSavedIdentity: () => null },
     './claudeStatusline': { ...mainRequire('./claudeStatusline'),
       installCapture: (dir) => { captureChanges.push(['enable', dir]); return { ok: true }; },
       restoreCapture: (dir) => { captureChanges.push(['undo', dir]); return { ok: true, alreadyDisabled: false }; },
@@ -72,6 +77,7 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10),
       return () => { watch.stopped = true; };
     } },
     './claudeCredentials': { ...mainRequire('./claudeCredentials'),
+      resolveCredentialFile: (dir) => ({ ok: true, file: Object.hasOwn(canonical, dir) ? canonical[dir] : `${dir}/.credentials.json`, mtimeMs: 1000 }),
       canonicalCredentialPath: (dir) => (Object.hasOwn(canonical, dir) ? canonical[dir] : `${dir}/.credentials.json`) },
     './readingCache': { loadReadings: () => ({}), saveReadings: (...args) => saves.push(args) },
     './icon': { drawGauge: (_size, fill) => { gauges.push(fill); return Buffer.alloc(0); } },
@@ -95,9 +101,10 @@ function harness({ poll = async () => ({}), local = () => reading('claude', 10),
     globalThis.hooks = { registerIpc, configureClaudeWatcher, pollProvidersOnce, applyLoginItemSettings,
       applyFreshReadings, updateTrayFromSnapshot, readClaudeAccount, refreshClaudeAccounts, purgeProfileData,
       setBudget: (v) => { claudeBudget = v; }, getActiveAlerts: () => activeAlerts,
+      getDiagnostics: claudeDiagnostics,
       getMerged: () => lastMerged, setMerged: (v) => { lastMerged = v; } };`, context);
   return { ...context.hooks, settings, handles, timers, canonical, watchers, saves, gauges, tips, warnings, history, dialogs, captureChanges,
-    credentialAttempts, loginChanges,
+    credentialAttempts, verificationAttempts, loginChanges,
     refreshCount: () => refreshCount, pollCount: () => pollCount };
 }
 
@@ -118,6 +125,49 @@ test('main: Claude capture cancellation performs no local changes', async () => 
     assert.match(dialog.detail, /C:\/fake\/work/);
     assert.match(dialog.detail, /original-statusline.json/);
   }
+});
+
+test('main: verification requires an approved profile and never reads credentials in demo mode', async () => {
+  for (const app of [harness(), harness({ demo: true })]) {
+    app.registerIpc();
+    assert.equal((await app.handles.get('claude:verifyAccount')({}, WORK)).ok, false);
+    assert.equal((await app.handles.get('claude:verifyAccount')({}, 'claude-profile-missing')).ok, false);
+    assert.equal(app.verificationAttempts.length, 0);
+  }
+  const app = harness();
+  app.registerIpc();
+  app.settings.patch({ claudeApiTopUp: { [WORK]: true }, claudeApiApproval: { [WORK]: 'C:/fake/work/.credentials.json' } });
+  assert.equal((await app.handles.get('claude:verifyAccount')({}, WORK)).ok, true);
+  assert.equal(app.verificationAttempts.length, 1);
+  assert.equal(app.verificationAttempts[0].configDir, 'C:/fake/work');
+  assert.equal(app.verificationAttempts[0].profileId, WORK);
+  assert.equal(app.getDiagnostics()[WORK].identity.source, 'api');
+  app.canonical['C:/fake/work'] = 'C:/elsewhere/.credentials.json';
+  assert.equal(app.getDiagnostics()[WORK].identity, null, 'repointing the login invalidates verification');
+});
+
+test('main: removing a profile while verification is pending cannot restore its identity', async () => {
+  let finish;
+  const app = harness({ verify: () => new Promise((resolve) => { finish = resolve; }) });
+  app.registerIpc();
+  app.settings.patch({ claudeApiTopUp: { [WORK]: true }, claudeApiApproval: { [WORK]: 'C:/fake/work/.credentials.json' } });
+  const pending = app.handles.get('claude:verifyAccount')({}, WORK);
+  await flush();
+  await app.handles.get('subscription-profile:remove')({}, 'claude', WORK);
+  finish({ ok: true, identity: { source: 'api' }, credentialMtimeMs: 1000 });
+  assert.equal((await pending).ok, false);
+  assert.equal(app.getDiagnostics()[WORK], undefined);
+});
+
+test('main: expired windows no longer count toward the tray gauge or appear as current percentages', () => {
+  const app = harness();
+  const now = Date.now();
+  app.updateTrayFromSnapshot({ now, providers: [{ title: 'Claude', ok: true, enabled: true, windows: {
+    session: { usedPercent: 99, resetsAt: new Date(now).toISOString() },
+    weekly: { usedPercent: 12, resetsAt: new Date(now + 60_000).toISOString() },
+  } }] });
+  assert.equal(app.gauges.at(-1), 0.12);
+  assert.match(app.tips.at(-1), /Claude: unknown \/ 12%/);
 });
 
 test('main: confirmed Claude capture operations affect only the chosen config folder', async () => {

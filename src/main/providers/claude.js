@@ -10,10 +10,12 @@ const fs = require('fs');
 const { usagePath } = require('../claudeStatusline');
 const { parseRetryAfter } = require('../claudeApiBudget');
 const { resolveCredentialFile } = require('../claudeCredentials');
+const { normalizeIdentity } = require('../claudeIdentity');
 const { mergeClaudeReadings, staleLimit, LOCAL_STALE_MS, API_STALE_MS } = require('../claudeMerge');
 const { CLAUDE_LOCAL_NOTE, CLAUDE_API_NOTE, clampPercent, okSnapshot, errorSnapshot } = require('./model');
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile';
 const USER_AGENT = 'ai-usage-tracker/1.5 (claude-usage-topup)';
 const API_TOPUP_AFTER_MS = 25 * 60_000;
 const API_TIMEOUT_MS = 15_000;
@@ -152,6 +154,54 @@ async function fetchClaudeApi(auth, deps = {}) {
   return normalizeClaudeApiUsage(body, auth, now);
 }
 
+/** Explicit account verification, never part of the polling loop. Shares the
+ * usage rate budget, and never refreshes or writes the profile's credentials. */
+async function verifyClaudeAccount(deps = {}) {
+  const { AbortSignal } = globalThis;
+  const auth = readClaudeAuth(deps);
+  const fail = (code, message, retryAt) => ({ ok: false, error: { code, message,
+    ...(Number.isFinite(retryAt) ? { retryAt } : {}) } });
+  if (!auth?.token) return fail('NO_AUTH', 'No usable saved Claude login in this profile');
+  const id = deps.profileId || 'claude';
+  const state = { credMtimeMs: auth.mtimeMs, localAt: deps.localAt || 0 };
+  if (!deps.budget) return fail('SUSPENDED', 'Claude API budget is unavailable');
+  const verdict = deps.budget.check(id, state, { force: true });
+  if (!verdict.ok) return fail(verdict.reason === 'auth' ? 'NO_AUTH' : verdict.reason === 'cooldown' ? 'HTTP_429'
+    : verdict.reason === 'suspended' ? 'SUSPENDED' : 'QUEUED',
+    verdict.reason === 'auth' ? 'API login rejected; sign in to Claude Code in this local profile again'
+      : 'Account verification is waiting for the Claude API budget', verdict.retryAt);
+  if (!deps.budget.begin(id)) return fail('SUSPENDED', 'Claude API budget could not be saved');
+  try {
+    const timeout = AbortSignal.timeout(API_TIMEOUT_MS);
+    const res = await (deps.fetchImpl || fetch)(deps.profileUrl || PROFILE_URL, {
+      method: 'GET', headers: { Authorization: `Bearer ${auth.token}`, Accept: 'application/json',
+        'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': USER_AGENT },
+      signal: deps.signal ? AbortSignal.any([deps.signal, timeout]) : timeout,
+    });
+    if (res.status === 429) {
+      const now = deps.now ? deps.now() : Date.now();
+      const retryAt = deps.budget.rateLimited(id, parseRetryAfter(res.headers?.get?.('retry-after'), now));
+      return fail('HTTP_429', 'Claude account API rate limited', retryAt);
+    }
+    if (res.status === 401) {
+      deps.budget.authFailed(id, state);
+      return fail('NO_AUTH', 'API login rejected; sign in to Claude Code in this local profile again');
+    }
+    // A profile-only scope rejection must not block an otherwise working usage token.
+    if (res.status === 403) return fail('PROFILE_FORBIDDEN', 'Claude API did not allow account verification for this login');
+    if (!res.ok) return fail(`HTTP_${res.status}`, `Claude account API returned ${res.status}`);
+    let body;
+    try { body = await res.json(); } catch { return fail('INVALID', 'Claude account API returned malformed JSON'); }
+    const identity = normalizeIdentity(body?.account, body?.organization, 'api');
+    if (!identity) return fail('INVALID', 'Claude account API returned no recognizable account identity');
+    deps.budget.success(id);
+    return { ok: true, identity, credentialMtimeMs: auth.mtimeMs,
+      verifiedAt: deps.now ? deps.now() : Date.now() };
+  } catch {
+    return fail('NETWORK', 'Claude account verification failed; no identity was verified');
+  }
+}
+
 function readLocalClaude(deps, now) {
   let data;
   try { data = JSON.parse((deps.readFileSync || fs.readFileSync)(deps.usagePath || usagePath(deps.configDir), 'utf8')); }
@@ -220,5 +270,6 @@ async function fetchClaudeQuotas(deps = {}) {
 
 module.exports = {
   fetchClaudeQuotas, fetchClaudeApi, normalizeClaudeUsage, normalizeClaudeApiUsage, readClaudeAuth,
+  verifyClaudeAccount,
   LOCAL_STALE_MS, API_STALE_MS, API_TOPUP_AFTER_MS,
 };

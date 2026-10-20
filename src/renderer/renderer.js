@@ -202,11 +202,9 @@
       badge.setAttribute('data-tip', lines.join('\n'));
       head.appendChild(badge);
     }
-    if (isClaude) {
-      const source = document.createElement('span');
-      source.className = 'card-source';
-      head.appendChild(source);
-    }
+    const source = document.createElement('span');
+    source.className = 'card-source';
+    head.appendChild(source);
     const spacer = document.createElement('span');
     spacer.className = 'spacer';
     head.appendChild(spacer);
@@ -230,11 +228,25 @@
     card.appendChild(head);
     updateReadingStatus(card, p);
 
+    if (isClaude && p.account) {
+      const account = document.createElement('div');
+      account.className = 'card-note account-identity';
+      account.textContent = p.account.identity?.email || 'Account identity unknown';
+      account.setAttribute('data-tip', window.AITRACKER_SUMMARY.accountDetail(p));
+      card.appendChild(account);
+    }
+    if (p.accountWarning) {
+      const warning = document.createElement('div');
+      warning.className = 'card-note account-warning';
+      warning.textContent = p.accountWarning;
+      card.appendChild(warning);
+    }
+
     if (!p.ok) {
       const err = document.createElement('div');
       err.className = 'card-error';
       err.textContent = isClaude
-        ? 'Waiting for usage'
+        ? p.error?.code === 'NO_AUTH' ? 'API login rejected — sign in locally' : p.error?.code === 'HTTP_429' ? 'API rate limited' : 'Waiting for usage'
         : p.error && p.error.message ? p.error.message : 'Unavailable';
       if (isClaude) err.setAttribute('data-tip', p.error?.message || 'Use Claude Code to capture usage');
       err.title = p.error && p.error.code ? `code: ${p.error.code}` : '';
@@ -293,7 +305,8 @@
         const clock = resetClock(cd.dataset.resetsAt, settings?.clock24 !== false);
         cd.title = clock ? expired ? `Reset passed ${clock}; showing the previous window` : `Resets at ${clock}` : 'Reset time unknown';
         const row = cd.closest('.wrow');
-        row.title = `${row.dataset.usageDetail} \u00b7 ${cd.dataset.resetsAt ? cd.title : 'does not reset'}`;
+        row.querySelector('.wpct').textContent = expired ? '?' : row.dataset.percent;
+        row.title = `${expired ? row.dataset.historicalDetail : row.dataset.usageDetail} \u00b7 ${cd.dataset.resetsAt ? cd.title : 'does not reset'}`;
       }
     }
   }
@@ -339,6 +352,8 @@
     cd.className = 'wcountdown';
     cd.dataset.resetsAt = w.resetsAt || '';
     const expired = Date.parse(w.resetsAt) <= now;
+    pct.textContent = expired ? '?' : displayPercent(w.usedPercent);
+    row.dataset.percent = displayPercent(w.usedPercent);
     row.classList.toggle('expired', expired);
     const cdText = expired ? 'ended' : countdown(w.resetsAt, now);
     if (cdText === null) {
@@ -353,7 +368,8 @@
     // Hover detail for the whole row: used vs remaining + reset time.
     const used = Math.round(w.usedPercent);
     row.dataset.usageDetail = `${w.label || kind}: ${used}% used \u00b7 ${100 - used}% remaining`;
-    row.title = `${row.dataset.usageDetail} \u00b7 ${w.resetsAt ? cd.title : 'does not reset'}`;
+    row.dataset.historicalDetail = `${w.label || kind}: current usage unknown; last window ${used}% used`;
+    row.title = `${expired ? row.dataset.historicalDetail : row.dataset.usageDetail} \u00b7 ${w.resetsAt ? cd.title : 'does not reset'}`;
     return row;
   }
 
@@ -481,6 +497,63 @@
   const panel = document.getElementById('settings-panel');
   const PROVIDER_IDS = ['codex', 'claude', 'zai', 'grok', 'gemini', 'openrouter', 'muse'];
 
+  // Tabs: one focused pane each. The choice lives in memory, so reopening
+  // Settings returns to the last tab.
+  const tabButtons = [...panel.querySelectorAll('.tab')];
+  let activeTab = tabButtons[0].dataset.tab;
+
+  function showTab(name) {
+    activeTab = name;
+    for (const tab of tabButtons) {
+      const on = tab.dataset.tab === name;
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
+      document.getElementById(tab.getAttribute('aria-controls')).hidden = !on;
+    }
+    panel.querySelector('.settings-scroll').scrollTop = 0;
+  }
+  for (const tab of tabButtons) tab.addEventListener('click', () => showTab(tab.dataset.tab));
+  panel.querySelector('.settings-tabs').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const i = tabButtons.findIndex((tab) => tab.dataset.tab === activeTab);
+    const next = tabButtons[(i + (e.key === 'ArrowRight' ? 1 : tabButtons.length - 1)) % tabButtons.length];
+    showTab(next.dataset.tab);
+    next.focus();
+  });
+  showTab(activeTab);
+
+  // "i" toggles: longer notes (safety details, alert rules) stay folded
+  // until asked for.
+  for (const button of panel.querySelectorAll('.info')) {
+    const note = document.getElementById(button.getAttribute('aria-controls'));
+    button.addEventListener('click', () => {
+      note.hidden = !note.hidden;
+      button.setAttribute('aria-expanded', String(!note.hidden));
+    });
+  }
+  // A click starts an action or a dialog; drop any hover tip it would leave behind.
+  panel.addEventListener('click', hideTip);
+
+  // Hover tips for the compact Claude account controls; the tab's "i" note
+  // carries the same details in full.
+  const CLAUDE_TIPS = {
+    capture: 'Enable capture: wraps Claude Code\'s status-line command and saves only usage percentages and reset times locally. Needs Node.js on PATH.',
+    restore: 'Undo capture: restores the previous status line if unchanged. Removing a profile or quitting does not undo capture.',
+    topUp: 'Off by default. When local capture is over 25 minutes old, read this profile\'s saved login (read-only) and ask the Claude usage API. Rate-budgeted; never refreshes tokens.',
+    verify: 'Verify account: check the identity attached to this profile\'s saved login via the Claude API (same rate budget; lasts this session). Enable API top-up first.',
+    remove: 'Stop tracking this profile. This does not undo capture, so undo first.',
+  };
+  document.getElementById('btn-claude-capture').setAttribute('data-tip', CLAUDE_TIPS.capture);
+  document.getElementById('btn-claude-restore').setAttribute('data-tip', CLAUDE_TIPS.restore);
+
+  function smallButton(text, tip) {
+    const button = document.createElement('button');
+    button.className = 'small-btn';
+    button.textContent = text;
+    if (tip) button.setAttribute('data-tip', tip);
+    return button;
+  }
+
   async function loadSettingsIntoUI() {
     settings = await window.tracker.getSettings();
     for (const id of PROVIDER_IDS) {
@@ -507,34 +580,39 @@
     const host = document.getElementById(`${provider}-profiles-list`);
     host.replaceChildren();
     for (const profile of profiles) {
-      const row = document.createElement('div');
-      row.className = `row claude-profile-row${provider === 'claude' ? ' claude-capture-row' : ''}`;
       const name = document.createElement('span');
       name.textContent = profile.label;
-      name.title = profile.configDir;
-      const remove = document.createElement('button');
-      remove.className = 'small-btn';
-      remove.textContent = 'Remove';
+      name.setAttribute('data-tip', profile.configDir);
+      const remove = smallButton('Remove', provider === 'claude' ? CLAUDE_TIPS.remove : 'Stop tracking this profile');
       remove.addEventListener('click', async () => {
         settings = await window.tracker.removeSubscriptionProfile(provider, profile.id);
         renderSubscriptionProfiles(provider, settings[`${provider}Profiles`] || []);
         window.tracker.refresh();
       });
-      row.append(name, remove);
-      if (provider === 'claude') {
-        const capture = document.createElement('button');
-        capture.className = 'small-btn';
-        capture.textContent = 'Enable capture';
-        capture.addEventListener('click', () => enableCapture(profile.id, capture));
-        row.insertBefore(capture, remove);
-        const restore = document.createElement('button');
-        restore.className = 'small-btn';
-        restore.textContent = 'Undo capture';
-        restore.addEventListener('click', () => restoreCapture(profile.id, restore));
-        row.insertBefore(restore, remove);
-        row.insertBefore(apiTopUpLabel(profile.id), remove);
+      if (provider !== 'claude') {
+        const row = document.createElement('div');
+        row.className = 'row profile-row';
+        row.append(name, remove);
+        host.appendChild(row);
+        continue;
       }
-      host.appendChild(row);
+      // Claude: the same compact card as "This PC" - name and account
+      // summary, then the actions on one line.
+      name.className = 'account-name';
+      const head = document.createElement('div');
+      head.className = 'account-head';
+      head.append(name, accountDiagnostics(profile.id), remove);
+      const capture = smallButton('Capture', CLAUDE_TIPS.capture);
+      capture.addEventListener('click', () => enableCapture(profile.id, capture));
+      const restore = smallButton('Undo', CLAUDE_TIPS.restore);
+      restore.addEventListener('click', () => restoreCapture(profile.id, restore));
+      const actions = document.createElement('div');
+      actions.className = 'account-actions';
+      actions.append(capture, restore, apiTopUpLabel(profile.id), verifyAccountButton(profile.id));
+      const card = document.createElement('div');
+      card.className = 'account';
+      card.append(head, actions);
+      host.appendChild(card);
     }
   }
 
@@ -542,7 +620,7 @@
   function apiTopUpLabel(id) {
     const label = document.createElement('label');
     label.className = 'api-topup';
-    label.title = 'When local capture is over 25 minutes old, read this profile\'s saved login (read-only) and ask the Claude usage API. Rate-budgeted; never refreshes tokens.';
+    label.setAttribute('data-tip', CLAUDE_TIPS.topUp);
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = !!(settings.claudeApiTopUp && settings.claudeApiTopUp[id]);
@@ -563,6 +641,61 @@
   function renderDefaultApiTopUp() {
     const host = document.getElementById('claude-default-topup');
     host.replaceChildren(apiTopUpLabel('claude'));
+    const row = document.getElementById('btn-claude-capture').parentElement;
+    if (!document.getElementById('btn-claude-verify')) {
+      const button = verifyAccountButton('claude');
+      button.id = 'btn-claude-verify';
+      row.appendChild(button);
+    }
+    const detail = document.getElementById('claude-default-account');
+    detail.replaceChildren(accountDiagnostics('claude'));
+  }
+
+  function verifyAccountButton(id) {
+    const button = smallButton('Verify', CLAUDE_TIPS.verify);
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const result = await window.tracker.verifyClaudeAccount(id);
+        showToast(result.ok ? 'Account verified via Claude API' : result.error);
+      } catch { showToast('Could not verify Claude account'); }
+      finally { button.disabled = false; }
+    });
+    return button;
+  }
+
+  /** One-line account summary; hover shows the full diagnostics, click unfolds them in place. */
+  function accountDiagnostics(id) {
+    const line = document.createElement('button');
+    line.className = 'account-diagnostics';
+    line.dataset.accountId = id;
+    line.setAttribute('aria-expanded', 'false');
+    line.addEventListener('click', () => {
+      line.setAttribute('aria-expanded', String(line.classList.toggle('open')));
+      updateAccountDiagnostics(line);
+    });
+    updateAccountDiagnostics(line);
+    return line;
+  }
+
+  function accountSummary(provider) {
+    if (!provider) return 'Waiting for account details';
+    if (!provider.account) return 'No account details';
+    const identity = provider.account.identity;
+    if (!identity) return 'Identity unknown';
+    return `${identity.email || identity.accountId} \u00b7 ${identity.source === 'api' ? 'verified' : 'unverified'}`;
+  }
+
+  function updateAccountDiagnostics(line) {
+    const provider = snapshot?.providers.find((p) => p.id === line.dataset.accountId);
+    const detail = provider ? window.AITRACKER_SUMMARY.accountDetail(provider) : '';
+    const open = line.classList.contains('open') && !!detail;
+    const warn = !!(provider && (provider.accountWarning || provider.account?.verificationError));
+    line.textContent = open ? detail : `${warn ? '\u26a0 ' : ''}${accountSummary(provider)}`;
+    line.classList.toggle('warn', warn);
+    line.disabled = !detail;
+    if (detail && !open) line.setAttribute('data-tip', detail);
+    else line.removeAttribute('data-tip');
   }
 
   async function enableCapture(id, button) {
@@ -660,73 +793,74 @@
   ];
   const keyEls = {};
 
+  /** Short status beside the provider name; a long error stays readable on hover. */
+  function setKeyStatus(el, text, tone = '') {
+    el.textContent = text;
+    el.title = text;
+    el.className = tone ? `key-status ${tone}` : 'key-status';
+  }
+
   function buildApiKeyUI() {
     const host = document.getElementById('api-keys');
     for (const p of KEY_PROVIDERS) {
       const block = document.createElement('div');
-      block.className = 'api-key-block';
+      block.className = 'key-block';
 
-      const title = document.createElement('div');
-      title.className = 'row';
-      title.textContent = p.label;
-      block.appendChild(title);
+      const head = document.createElement('div');
+      head.className = 'key-head';
+      const name = document.createElement('span');
+      name.className = 'key-name';
+      name.textContent = p.label;
+      const status = document.createElement('span');
+      status.className = 'key-status'; status.id = `${p.id}-status`;
+      head.append(name, status);
+      block.appendChild(head);
 
       if (p.url) {
         const urlRow = document.createElement('label');
-        urlRow.className = 'row keyrow';
-        urlRow.append(document.createTextNode('API base URL'));
+        urlRow.className = 'key-row';
+        const urlLabel = document.createElement('span');
+        urlLabel.className = 'key-label';
+        urlLabel.textContent = 'Base URL';
         const urlInput = document.createElement('input');
         urlInput.type = 'url';
         urlInput.id = 'set-zai-url';
         urlInput.spellcheck = false;
-        urlRow.appendChild(urlInput);
+        urlRow.append(urlLabel, urlInput);
         block.appendChild(urlRow);
       }
 
-      const keyRow = document.createElement('label');
-      keyRow.className = 'row keyrow';
-      keyRow.append(document.createTextNode('API key'));
+      const keyRow = document.createElement('div');
+      keyRow.className = 'key-row';
       const keyInput = document.createElement('input');
       keyInput.type = 'password';
       keyInput.id = `set-${p.id}-key`;
-      keyInput.placeholder = 'Credential Manager';
+      keyInput.placeholder = 'API key';
+      keyInput.setAttribute('aria-label', `${p.label} API key`);
       keyInput.autocomplete = 'off';
       keyInput.spellcheck = false;
-      keyRow.appendChild(keyInput);
+      const save = smallButton('Store', 'Store this key in Windows Credential Manager (asks first)');
+      const test = smallButton('Test', 'Test the stored key with the provider (asks first)');
+      const remove = smallButton('Remove', 'Delete the stored key (asks first)');
+      keyRow.append(keyInput, save, test, remove);
       block.appendChild(keyRow);
-
-      const actions = document.createElement('div');
-      actions.className = 'row api-key-actions';
-      const save = document.createElement('button');
-      save.className = 'small-btn'; save.textContent = 'Store key';
-      const test = document.createElement('button');
-      test.className = 'small-btn'; test.textContent = 'Test';
-      const remove = document.createElement('button');
-      remove.className = 'small-btn'; remove.textContent = 'Remove';
-      const status = document.createElement('span');
-      status.className = 'hint'; status.id = `${p.id}-status`;
-      actions.append(save, test, remove, status);
-      block.appendChild(actions);
 
       save.addEventListener('click', async () => {
         const key = keyInput.value;
-        const stat = status;
-        if (!key) { stat.textContent = 'Enter a key first'; return; }
+        if (!key) { setKeyStatus(status, 'Enter a key first', 'warn'); return; }
         const res = await window.tracker.providerSaveKey(p.id, key);
-        stat.textContent = res.ok ? 'Key stored' : (res.error || 'Failed');
-        if (res.ok) keyInput.value = '';
+        if (res.ok) { setKeyStatus(status, 'Key stored', 'ok'); keyInput.value = ''; } else setKeyStatus(status, res.error || 'Failed', 'warn');
         refreshKeyStatuses();
       });
       test.addEventListener('click', async () => {
-        status.textContent = 'Testing\u2026';
+        setKeyStatus(status, 'Testing\u2026');
         const res = await window.tracker.providerTestKey(p.id);
-        status.textContent = res.ok
-          ? `OK${res.plan ? ` (${res.plan})` : ''}, ${res.windows} window(s)`
-          : (res.error || 'Failed');
+        if (res.ok) setKeyStatus(status, `OK${res.plan ? ` (${res.plan})` : ''}, ${res.windows} window(s)`, 'ok');
+        else setKeyStatus(status, res.error || 'Failed', 'warn');
       });
       remove.addEventListener('click', async () => {
         const res = await window.tracker.providerRemoveKey(p.id);
-        status.textContent = res.ok ? 'Key removed' : (res.error || 'Failed');
+        if (res.ok) setKeyStatus(status, 'Key removed'); else setKeyStatus(status, res.error || 'Failed', 'warn');
         refreshKeyStatuses();
       });
 
@@ -741,9 +875,10 @@
       if (!el) continue;
       try {
         const exists = await window.tracker.providerKeyExists(p.id);
-        el.textContent = exists === null ? 'Credential Manager unavailable' : (exists ? 'Key stored' : 'No key stored');
+        if (exists === null) setKeyStatus(el, 'Credential Manager unavailable', 'warn');
+        else setKeyStatus(el, exists ? 'Key stored' : 'No key stored', exists ? 'ok' : '');
       } catch {
-        el.textContent = 'Credential Manager unavailable';
+        setKeyStatus(el, 'Credential Manager unavailable', 'warn');
       }
     }
   }
@@ -756,6 +891,7 @@
     settings = { ...(settings || {}), clock24: snap.clock24, percentMode: snap.percentMode };
     try {
       render(snap);
+      document.querySelectorAll('.account-diagnostics').forEach(updateAccountDiagnostics);
     } catch (cause) {
       console.error('render failed:', cause);
       window.tracker.reportError(`render failed: ${cause && cause.message}`);

@@ -9,7 +9,7 @@ const {
   ClaudeApiBudget, parseRetryAfter, MIN_INTERVAL_MS, STAGGER_MS, BACKOFF_MS, MAX_RETRY_AFTER_MS,
   SUCCESSES_TO_EASE, QUIET_EASE_MS, UNRECOVERABLE_BLOCK_MS,
 } = require('../src/main/claudeApiBudget');
-const { fetchClaudeQuotas, normalizeClaudeApiUsage, readClaudeAuth, API_TOPUP_AFTER_MS } = require('../src/main/providers/claude');
+const { fetchClaudeQuotas, normalizeClaudeApiUsage, readClaudeAuth, verifyClaudeAccount, API_TOPUP_AFTER_MS } = require('../src/main/providers/claude');
 const { mergeClaudeReadings, reconcileClaudeReadings, orderByObservationAge, API_STALE_MS } = require('../src/main/claudeMerge');
 const { writeFileAtomic } = require('../src/main/atomicWrite');
 
@@ -380,6 +380,54 @@ function localUsage(c, ageMs, percent = 20) {
 function withLocal(h, data) {
   h.deps.readFileSync = ((orig) => (f) => (f.endsWith('usage.json') ? JSON.stringify(data) : orig(f)))(h.deps.readFileSync);
 }
+
+test('Claude verification: queries only the selected login, returns identity metadata and shares the usage budget', async () => {
+  const h = harness({ body: { account: { uuid: '11111111-1111-4111-8111-111111111111', email: 'one@example.com', accessToken: 'never-return' },
+    organization: { uuid: '22222222-2222-4222-8222-222222222222' } } });
+  const result = await verifyClaudeAccount(h.deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.identity.source, 'api');
+  assert.equal(result.identity.email, 'one@example.com');
+  assert.equal(result.credentialMtimeMs, h.cred.mtimeMs);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, 'https://api.anthropic.com/api/oauth/profile');
+  assert.equal(h.calls[0].init.headers.Authorization, 'Bearer tok-secret');
+  assert.ok(!JSON.stringify(result).includes('never-return'));
+  assert.deepEqual(h.writes, []);
+  const queued = await verifyClaudeAccount(h.deps);
+  assert.equal(queued.error.code, 'QUEUED');
+  assert.equal(h.calls.length, 1, 'repeated clicks never bypass the API budget');
+});
+
+test('Claude verification: cooldown/auth blocks stop requests; profile scope rejection does not disable usage', async () => {
+  for (const status of [401, 429]) {
+    const h = harness({ status });
+    const result = await verifyClaudeAccount(h.deps);
+    assert.equal(result.error.code, status === 401 ? 'NO_AUTH' : 'HTTP_429');
+    h.c.advance(2 * MIN);
+    const again = await verifyClaudeAccount(h.deps);
+    assert.equal(again.error.code, result.error.code);
+    assert.equal(h.calls.length, 1);
+  }
+  const forbidden = harness({ status: 403 });
+  assert.equal((await verifyClaudeAccount(forbidden.deps)).error.code, 'PROFILE_FORBIDDEN');
+  assert.equal(forbidden.b.status('claude').authBlocked, false);
+  const signedOut = harness({ token: null });
+  assert.equal((await verifyClaudeAccount(signedOut.deps)).error.code, 'NO_AUTH');
+  assert.equal(signedOut.calls.length, 0);
+});
+
+test('Claude verification: malformed data and transport errors never expose tokens or raw response fields', async () => {
+  const h = harness({ body: { accessToken: 'secret-response' } });
+  const invalid = await verifyClaudeAccount(h.deps);
+  assert.equal(invalid.error.code, 'INVALID');
+  assert.ok(!JSON.stringify(invalid).includes('secret-response'));
+  h.c.advance(2 * MIN);
+  h.deps.fetchImpl = async () => { throw new Error('Bearer tok-secret'); };
+  const failure = await verifyClaudeAccount(h.deps);
+  assert.equal(failure.error.code, 'NETWORK');
+  assert.ok(!JSON.stringify(failure).includes('tok-secret'));
+});
 
 test('claude api: normalizes utilization windows and flags the source', () => {
   const snap = normalizeClaudeApiUsage(apiBody, { plan: 'max' }, T0);

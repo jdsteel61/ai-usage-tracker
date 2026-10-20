@@ -78,7 +78,7 @@ function shapeProvider(id, snap, { enabled, activeAlerts, now }) {
 }
 
 /** Shape the full broadcast payload. Never throws for any provider state. */
-function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now() } = {}) {
+function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now(), claudeDiagnostics = {} } = {}) {
   const profiles = settings && Array.isArray(settings.claudeProfiles) ? settings.claudeProfiles : [];
   const codexProfiles = settings && Array.isArray(settings.codexProfiles) ? settings.codexProfiles : [];
   const ids = [ORDER[0], ...codexProfiles.map((p) => p.id), ORDER[1], ...profiles.map((p) => p.id), ...ORDER.slice(2)];
@@ -92,6 +92,33 @@ function shapeSnapshot(merged, { settings, activeAlerts = {}, now = Date.now() }
       now,
     });
   }).map((provider) => ({ ...provider, title: titles[provider.id] || provider.title }));
+  for (const provider of providers) {
+    const diagnostic = claudeDiagnostics[provider.id];
+    if (!diagnostic) continue;
+    provider.account = diagnostic;
+    if (diagnostic.apiError) {
+      provider.error = diagnostic.apiError;
+      if (provider.ok) provider.stale = true;
+    }
+    const identity = diagnostic.identity;
+    if (!identity) continue;
+    if (identity.source === 'api' && diagnostic.savedIdentity
+        && (identity.accountId !== diagnostic.savedIdentity.accountId
+          || identity.organizationId !== diagnostic.savedIdentity.organizationId)) {
+      provider.accountWarning = 'Saved Claude identity differs from the API login; check which account this profile uses';
+    }
+    const duplicates = providers.filter((other) => {
+      if (other.id === provider.id || !claudeDiagnostics[other.id]?.identity) return false;
+      const theirs = claudeDiagnostics[other.id].identity;
+      return identity.accountId === theirs.accountId
+        || (identity.organizationId && identity.organizationId === theirs.organizationId);
+    });
+    if (duplicates.length) {
+      const verified = identity.source === 'api' && duplicates.every((other) => claudeDiagnostics[other.id].identity.source === 'api');
+      const warning = `${verified ? 'Same API account or subscription' : 'Same saved account or subscription (unverified)'} as ${duplicates.map((p) => p.title).join(', ')}`;
+      provider.accountWarning = [provider.accountWarning, warning].filter(Boolean).join('; ');
+    }
+  }
   return {
     now,
     clock24: settings ? settings.clock24 !== false : true,

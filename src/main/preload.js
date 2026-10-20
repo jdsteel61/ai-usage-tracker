@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('tracker', {
   enableClaudeCapture: (id) => ipcRenderer.invoke('claude:enableCapture', id),
   restoreClaudeCapture: (id) => ipcRenderer.invoke('claude:restoreCapture', id),
   setClaudeApiTopUp: (id, enabled) => ipcRenderer.invoke('claude:setApiTopUp', id, !!enabled),
+  verifyClaudeAccount: (id) => ipcRenderer.invoke('claude:verifyAccount', id),
   refresh: () => ipcRenderer.send('refresh'),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),

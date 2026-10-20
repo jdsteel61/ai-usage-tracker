@@ -10,9 +10,10 @@ const path = require('path');
 const { installCapture, restoreCapture, usagePath } = require('./claudeStatusline');
 const { watchClaudeUsage } = require('./claudeWatcher');
 const { ClaudeApiBudget } = require('./claudeApiBudget');
-const { fetchClaudeQuotas } = require('./providers/claude');
+const { fetchClaudeQuotas, verifyClaudeAccount } = require('./providers/claude');
 const { reconcileClaudeReadings, orderByObservationAge } = require('./claudeMerge');
-const { canonicalCredentialPath, samePath } = require('./claudeCredentials');
+const { canonicalCredentialPath, resolveCredentialFile, samePath } = require('./claudeCredentials');
+const { readSavedIdentity } = require('./claudeIdentity');
 const { loadReadings, saveReadings } = require('./readingCache');
 const os = require('os');
 const {
@@ -64,6 +65,33 @@ let lastMerged = {};      // raw merged provider map from the last poll
 let readingsPath = null;
 const claudeWatchers = new Map(); // usage.json path -> { id, active, stop }
 let claudeBudget = null;
+const claudeVerifications = new Map(); // session-only, bound to the exact login file and its mtime
+
+function claudeDiagnostics(s = settings.get()) {
+  if (IS_DEMO) return {};
+  return Object.fromEntries(claudeAccounts(s).map(({ id, configDir }) => {
+    let verified = claudeVerifications.get(id);
+    if (verified) {
+      const credential = resolveCredentialFile(configDir);
+      if (!credential.ok || !samePath(credential.file, verified.credentialPath)
+          || credential.mtimeMs !== verified.credentialMtimeMs || !s.claudeApiTopUp[id]) {
+        claudeVerifications.delete(id);
+        verified = null;
+      }
+    }
+    const budget = s.claudeApiTopUp[id] ? claudeBudget?.status(id) : null;
+    const savedIdentity = readSavedIdentity(configDir, { defaultProfile: id === 'claude' });
+    return [id, { configDir, machine: os.hostname(), apiEnabled: s.claudeApiTopUp[id] === true,
+      identity: verified?.identity || savedIdentity,
+      savedIdentity,
+      verifiedAt: verified?.verifiedAt || null,
+      verificationError: verified?.error || null,
+      ...(budget?.authBlocked ? { apiError: { code: 'NO_AUTH',
+        message: 'API login rejected; sign in to Claude Code in this local profile again. Signing in only on the SSH machine does not update this PC.' } }
+        : budget?.retryAt > Date.now() ? { apiError: { code: 'HTTP_429', message: 'Claude usage API rate limited', retryAt: budget.retryAt } } : {}),
+    }];
+  }));
+}
 
 function configuredIds(s = settings.get()) {
   return [...Object.keys(s.providers), ...s.codexProfiles.map((p) => p.id),
@@ -468,6 +496,7 @@ function applyFreshReadings(freshInput) {
 
 /** Forget everything stored for a profile id: readings, history, alerts, API budget. */
 function purgeProfileData(id) {
+  claudeVerifications.delete(id);
   lastMerged = Object.fromEntries(Object.entries(lastMerged).filter(([key]) => key !== id));
   activeAlerts = Object.fromEntries(Object.entries(activeAlerts).filter(([key]) => !key.startsWith(`${id}:`)));
   history.purge(id);
@@ -482,7 +511,7 @@ function broadcast(merged, now) {
   const s = settings.get();
   let view;
   try {
-    view = shapeSnapshot(merged, { settings: s, activeAlerts, now });
+    view = shapeSnapshot(merged, { settings: s, activeAlerts, now, claudeDiagnostics: claudeDiagnostics(s) });
   } catch (cause) {
     // Shaping must never take the app down; log and fall back to an empty view.
     log.error('broadcast', `snapshot shaping failed: ${cause.message}`);
@@ -502,15 +531,17 @@ function updateTrayFromSnapshot(snapshot) {
     if (!p.ok || p.enabled === false) continue;
     for (const kind of ['session', 'weekly']) {
       const w = p.windows[kind];
-      if (w && Number.isFinite(w.usedPercent)) max = Math.max(max, w.usedPercent);
+      if (w && Number.isFinite(w.usedPercent) && !(Date.parse(w.resetsAt) <= snapshot.now)) max = Math.max(max, w.usedPercent);
     }
   }
   const fill = max / 100;
   rebuildTrayMenu(fill);
   if (tray) {
     const parts = snapshot.providers.filter((p) => p.ok && p.enabled !== false).map((p) => {
-      const s = p.windows.session ? `${Math.round(p.windows.session.usedPercent)}%` : '—';
-      const w = p.windows.weekly ? `${Math.round(p.windows.weekly.usedPercent)}%` : '—';
+      const percent = (window) => window && Number.isFinite(window.usedPercent)
+        && !(Date.parse(window.resetsAt) <= snapshot.now) ? `${Math.round(window.usedPercent)}%` : 'unknown';
+      const s = percent(p.windows.session);
+      const w = percent(p.windows.weekly);
       return `${p.title}: ${s} / ${w}`;
     });
     tray.setToolTip(parts.length ? `AI Usage\n${parts.join('\n')}` : 'AI Usage Tracker');
@@ -662,6 +693,8 @@ function registerIpc() {
         detail: `Claude config folder: ${account.configDir}
 Credentials file: ${credentialPath}
 
+Clicking Verify account also sends this login to https://api.anthropic.com/api/oauth/profile to check its account email and subscription identity. Verification uses the same rate budget and is kept only for this tracker session.
+
 Only when this account's local reading is missing or older than 25 minutes, the tracker reads the access token from .credentials.json in that folder and sends it to https://api.anthropic.com/api/oauth/usage to fetch usage percentages. It never writes or refreshes credentials, sends prompts, or uses model quota. That endpoint rate-limits aggressively, so calls are budgeted: at least 10 minutes per account, staggered across accounts, and backed off for hours after HTTP 429 or a sign-in rejection. This approval applies only to the credentials file shown above: if that folder later resolves elsewhere, it is cleared. Turn this off at any time in Settings.`,
       });
       if (confirmation.response !== 1) return { ok: false, canceled: true };
@@ -675,6 +708,36 @@ Only when this account's local reading is missing or older than 25 minutes, the 
         .catch((cause) => log.warn('claude-api', cause.message));
     }
     return { ok: true, settings: { ...next } };
+  });
+
+  ipcMain.handle('claude:verifyAccount', async (_e, id) => {
+    if (IS_DEMO) return { ok: false, error: 'Account verification is disabled in demo mode' };
+    const account = claudeAccounts().find((a) => a.id === id);
+    if (!account) return { ok: false, error: 'Unknown Claude profile' };
+    if (!claudeApiAllowed(id, account.configDir)) return { ok: false, error: 'Enable API top-up for this profile before verifying its account' };
+    const credentialPath = canonicalCredentialPath(account.configDir);
+    const run = claudeChain.then(async () => {
+      // Recheck after queued work; a removed or repointed account cannot be read.
+      if (!claudeAccounts().some((a) => a.id === id && a.configDir === account.configDir)
+          || !claudeApiAllowed(id, account.configDir)) return { ok: false, error: 'Claude profile changed before verification' };
+      const result = await verifyClaudeAccount({ configDir: account.configDir, profileId: id,
+        budget: claudeBudget, localAt: lastMerged[id]?.source === 'claude-statusline' ? lastMerged[id].fetchedAt : 0 });
+      if (!claudeAccounts().some((a) => a.id === id && a.configDir === account.configDir)
+          || !claudeApiAllowed(id, account.configDir)) return { ok: false, error: 'Claude profile changed during verification' };
+      const credential = resolveCredentialFile(account.configDir);
+      if (result.ok && (!credential.ok || !samePath(credential.file, credentialPath)
+          || credential.mtimeMs !== result.credentialMtimeMs)) {
+        claudeVerifications.delete(id);
+        broadcast(lastMerged, Date.now());
+        return { ok: false, error: 'Claude login changed during verification; verify the new login again' };
+      }
+      claudeVerifications.set(id, { ...result, credentialPath,
+        credentialMtimeMs: result.credentialMtimeMs ?? credential.mtimeMs });
+      broadcast(lastMerged, Date.now());
+      return result.ok ? { ok: true } : { ok: false, error: result.error.message };
+    });
+    claudeChain = run.catch(() => {});
+    return run;
   });
 
   ipcMain.handle('claude:restoreCapture', async (_e, id) => {
@@ -972,6 +1035,26 @@ function scheduleScreenshots() {
       }, 1200);
     }));
   }
+  // Settings panel as it opens, then each tab, so every layout can be reviewed.
+  const captureAs = (file, js, delay) => new Promise((resolve) => {
+    mainWindow.webContents.executeJavaScript(js).catch(() => {});
+    setTimeout(async () => {
+      try {
+        const fs = require('fs');
+        const image = await mainWindow.webContents.capturePage();
+        fs.writeFileSync(path.join(screenshotDir, file), image.toPNG());
+      } catch (cause) { log.error('screenshot', cause.message); }
+      resolve();
+    }, delay);
+  });
+  chain = chain.then(() => {
+    mainWindow.webContents.setZoomFactor(1.0);
+    return captureAs('mini-settings.png', "document.getElementById('btn-settings').click()", 800);
+  });
+  chain = chain.then(() => mainWindow.webContents.executeJavaScript(
+    "[...document.querySelectorAll('#settings-panel [data-tab]')].map((tab) => tab.dataset.tab)").catch(() => []))
+    .then((tabs) => tabs.reduce((next, tab) => next.then(() => captureAs(`mini-settings-${tab}.png`,
+      `document.querySelector('#settings-panel [data-tab="${tab}"]').click()`, 400)), Promise.resolve()));
   chain.then(() => { app.isQuitting = true; app.quit(); });
 }
 let screenshotTaken = false;

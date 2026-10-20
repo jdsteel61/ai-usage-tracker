@@ -71,6 +71,8 @@ test('summary: old local account includes the reading age and expired resets', (
     windows: { session: { label: '5 hr', usedPercent: 20, resetsAt: '2026-09-22T08:00:00Z' } },
   }]), { now: NOW });
   assert.match(text, /reset passed/);
+  assert.match(text, /5 hr current usage unknown \(last window 20%/);
+  assert.doesNotMatch(text, /5 hr 20%/);
   assert.doesNotMatch(text, /\(resets /);
   assert.match(text, /\[stale; local Claude Code reading; reading 1h 35m old\]/);
 });
@@ -84,6 +86,21 @@ test('summary: cached and unavailable cooldowns include the next retry', () => {
   ]), { now: NOW });
   assert.ok(text.includes(`[stale; reading 12m old; cooldown; next retry ${t(retryAt)}]`));
   assert.ok(text.includes(`Z.ai: unavailable (RATE_LIMITED) [cooldown; next retry ${t(retryAt)}]`));
+});
+
+test('summary: Claude API login failures and duplicate identities are visible without sharing personal metadata', () => {
+  const provider = { id: 'claude', title: 'Claude', ok: true, fetchedAt: NOW - 60_000,
+    source: 'claude-api', error: { code: 'NO_AUTH', message: 'API login rejected; sign in locally' },
+    account: { configDir: 'C:/private/profile', identity: { email: 'private@example.com', source: 'saved' } },
+    accountWarning: 'Same saved account or subscription (unverified) as Work',
+    windows: { weekly: { label: 'Week', usedPercent: 97, resetsAt: null } } };
+  const text = buildUsageSummary(snap([provider]), { now: NOW });
+  assert.match(text, /stale.*API login rejected/);
+  assert.match(text, /Same saved account/);
+  assert.doesNotMatch(text, /private@example.com|C:\/private/);
+  const status = readingStatus(provider, { now: NOW });
+  assert.equal(status.label, 'login rejected');
+  assert.match(status.detail, /private@example.com.*not API verified/);
 });
 
 test('summary: local fresh reading includes age without stale flag', () => {
@@ -159,6 +176,8 @@ test('source label: local is live when fresh; ages and API source are spelled ou
   assert.equal(sourceLabel({ ...local, fetchedAt: NOW - 7 * 60_000 }, NOW), 'local \u00b7 7 min ago');
   assert.equal(sourceLabel({ notes: ['From Claude usage API'], fetchedAt: NOW - 12 * 60_000 }, NOW), 'api \u00b7 12 min ago');
   assert.equal(sourceLabel({ source: 'claude-api', fetchedAt: NOW - 95 * 60_000 }, NOW), 'api \u00b7 1 h 35 min ago');
+  assert.equal(sourceLabel({ id: 'muse', fetchedAt: NOW - 9 * 60_000 }, NOW), '9 min ago');
+  assert.equal(sourceLabel({ id: 'muse' }, NOW), '');
 });
 
 test('summary: current remote readings include age and age into stale at copy time', () => {

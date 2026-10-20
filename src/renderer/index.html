@@ -35,74 +35,95 @@
   <main id="cards" aria-live="polite"></main>
 
   <section id="settings-panel" hidden>
+    <!-- One focused pane per tab. Longer notes sit behind the "i" toggles. -->
+    <div class="settings-head">
+      <div class="settings-tabs" role="tablist" aria-label="Settings">
+        <button class="tab" role="tab" id="tab-general" data-tab="general" aria-controls="pane-general">General</button>
+        <button class="tab" role="tab" id="tab-providers" data-tab="providers" aria-controls="pane-providers">Providers</button>
+        <button class="tab" role="tab" id="tab-claude" data-tab="claude" aria-controls="pane-claude">Claude</button>
+        <button class="tab" role="tab" id="tab-alerts" data-tab="alerts" aria-controls="pane-alerts">Alerts</button>
+        <button class="tab" role="tab" id="tab-keys" data-tab="keys" aria-controls="pane-keys">Keys</button>
+      </div>
+      <button id="btn-settings-close" class="small-btn">Done</button>
+    </div>
+
     <div class="settings-scroll">
-      <div class="settings-head">
-        <h2>Settings</h2>
-        <button id="btn-settings-close" class="small-btn">Done</button>
+      <div class="pane" role="tabpanel" id="pane-general" aria-labelledby="tab-general">
+        <label class="row">Refresh (min)
+          <input type="number" id="set-interval" min="1" max="1440" step="1" /></label>
+        <label class="row">Percent
+          <select id="set-percentmode">
+            <option value="used">Used</option>
+            <option value="remaining">Remaining</option>
+          </select></label>
+        <label class="row">Time format
+          <select id="set-clock">
+            <option value="24">24-hour</option>
+            <option value="12">12-hour</option>
+          </select></label>
+        <label class="row">Theme
+          <select id="set-theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select></label>
+        <div class="sec-head"><h3>Window</h3><button class="info" aria-controls="info-window" aria-expanded="false" aria-label="About the window" title="Details">i</button></div>
+        <p class="info-text" id="info-window" hidden>Cards scale to fit the window; drag its edge to resize.</p>
+        <div class="check-grid">
+          <label class="row"><input type="checkbox" id="set-ontop" /> Always on top</label>
+          <label class="row"><input type="checkbox" id="set-login" /> Launch at sign-in</label>
+        </div>
       </div>
 
-      <h3>Providers</h3>
-      <div class="check-grid three">
-        <label class="row"><input type="checkbox" id="set-prov-codex" /> Codex</label>
-        <label class="row"><input type="checkbox" id="set-prov-claude" /> Claude</label>
-        <label class="row"><input type="checkbox" id="set-prov-zai" /> Z.ai</label>
-        <label class="row"><input type="checkbox" id="set-prov-grok" /> Grok</label>
-        <label class="row"><input type="checkbox" id="set-prov-gemini" /> Gemini</label>
-        <label class="row"><input type="checkbox" id="set-prov-openrouter" /> OpenRouter</label>
-        <label class="row"><input type="checkbox" id="set-prov-muse" /> Muse</label>
-      </div>
-      <div class="provider-profiles">
-        <div class="row"><strong>Codex CLI profiles</strong><button id="btn-codex-profile-add" class="small-btn">Add profile…</button></div>
-        <p class="hint">Choose another signed-in Codex home folder. Each profile gets a separate card and history.</p>
+      <div class="pane" role="tabpanel" id="pane-providers" aria-labelledby="tab-providers" hidden>
+        <div class="sec-head"><h3>Enabled</h3></div>
+        <div class="check-grid three">
+          <label class="row"><input type="checkbox" id="set-prov-codex" /> Codex</label>
+          <label class="row"><input type="checkbox" id="set-prov-claude" /> Claude</label>
+          <label class="row"><input type="checkbox" id="set-prov-zai" /> Z.ai</label>
+          <label class="row"><input type="checkbox" id="set-prov-grok" /> Grok</label>
+          <label class="row"><input type="checkbox" id="set-prov-gemini" /> Gemini</label>
+          <label class="row"><input type="checkbox" id="set-prov-openrouter" /> OpenRouter</label>
+          <label class="row"><input type="checkbox" id="set-prov-muse" /> Muse</label>
+        </div>
+        <div class="sec-head"><h3>Codex profiles</h3><button class="info" aria-controls="info-codex" aria-expanded="false" aria-label="About Codex profiles" title="Details">i</button><button id="btn-codex-profile-add" class="small-btn">Add profile…</button></div>
+        <p class="info-text" id="info-codex" hidden>Add another signed-in Codex home folder. Each profile gets its own card and history.</p>
         <div id="codex-profiles-list"></div>
       </div>
-      <div class="claude-profiles">
-        <div class="row"><strong>Claude Code profiles</strong><button id="btn-claude-profile-add" class="small-btn">Add profile…</button></div>
-        <p class="hint">Every account is watched at once. Usage updates while you use Claude Code; enable local capture for each account.</p>
-        <p class="hint">Capture wraps Claude's status-line command and preserves its display. It saves only usage percentages, reset times, and observation times locally; it reads no credentials and makes no network requests. Node.js must be on PATH.</p>
-        <p class="hint">Optional API top-up (off by default) fills in an account whose capture is over 25 minutes old by reading its saved login, read-only, and asking Claude's usage API. Calls are rate-limited and backed off after HTTP 429; tokens are never refreshed.</p>
-        <div class="row claude-capture-row"><span>Claude</span><button id="btn-claude-capture" class="small-btn">Enable capture</button><button id="btn-claude-restore" class="small-btn">Undo capture</button><span id="claude-default-topup" class="api-topup-host"></span></div>
+
+      <div class="pane" role="tabpanel" id="pane-claude" aria-labelledby="tab-claude" hidden>
+        <div class="sec-head"><h3>Claude Code</h3><button class="info" aria-controls="info-claude" aria-expanded="false" aria-label="About capture and API top-up" title="Details">i</button><button id="btn-claude-profile-add" class="small-btn">Add profile…</button></div>
+        <div class="info-text" id="info-claude" hidden>
+          <p><strong>Capture</strong> (optional) wraps Claude Code's status-line command and saves only usage percentages and reset times locally. Needs Node.js on PATH.</p>
+          <p><strong>Undo</strong> restores the previous status line if unchanged. Removing a profile or quitting does not undo capture, so undo first.</p>
+          <p><strong>API top-up</strong> is off by default. It fills in readings over 25 minutes old by reading the saved login (read-only) and asking Claude's usage API, so it also sees usage from other machines (e.g. Claude Code over SSH); keep this PC's profile signed in. Rate-limited and backed off after HTTP 429; tokens are never refreshed.</p>
+          <p><strong>Verify</strong> checks the saved login against Claude's account API (same rate budget); it lasts for this session.</p>
+        </div>
+        <div class="account">
+          <div class="account-head"><span class="account-name">This PC</span><span id="claude-default-account" class="account-host"></span></div>
+          <div class="account-actions"><button id="btn-claude-capture" class="small-btn">Capture</button><button id="btn-claude-restore" class="small-btn">Undo</button><span id="claude-default-topup" class="api-topup-host"></span></div>
+        </div>
         <div id="claude-profiles-list"></div>
-        <p class="hint">Undo restores the previous status line if it is unchanged. Cached readings and helper files stay on disk. Removing a profile or quitting does not undo capture; undo before removing a profile.</p>
       </div>
 
-      <h3>Refresh &amp; display</h3>
-      <label class="row">Interval (min, min 1)
-        <input type="number" id="set-interval" min="1" max="1440" step="1" /></label>
-      <label class="row">Percentage shows
-        <select id="set-percentmode">
-          <option value="used">Used</option>
-          <option value="remaining">Remaining</option>
-        </select></label>
-      <label class="row">Reset times
-        <select id="set-clock">
-          <option value="24">24-hour</option>
-          <option value="12">12-hour</option>
-        </select></label>
-      <label class="row">Theme
-        <select id="set-theme">
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select></label>
-      <div class="check-grid">
-        <label class="row"><input type="checkbox" id="set-ontop" /> Always on top</label>
-        <label class="row"><input type="checkbox" id="set-login" /> Launch at sign-in</label>
+      <div class="pane" role="tabpanel" id="pane-alerts" aria-labelledby="tab-alerts" hidden>
+        <div class="sec-head"><h3>Spike alerts</h3><button class="info" aria-controls="info-alerts" aria-expanded="false" aria-label="About spike alerts" title="Details">i</button></div>
+        <p class="info-text" id="info-alerts" hidden>A red ! marks a card when a quota jumps sharply within one polling interval, often a runaway agent loop. It fires on a rise of at least Jump points, or of at least Relative min points at a rate above the 24-hour median rate times Rate. Resets, first readings and long gaps never alert.</p>
+        <label class="row">Jump (points)
+          <input type="number" id="set-spike-abs" min="1" max="100" step="1" /></label>
+        <label class="row">Relative min (points)
+          <input type="number" id="set-spike-rel-min" min="1" max="100" step="1" /></label>
+        <label class="row">Rate (&times; 24h median)
+          <input type="number" id="set-spike-rel-mult" min="1" max="100" step="0.5" /></label>
+        <label class="row">Alert lasts (min)
+          <input type="number" id="set-spike-minutes" min="1" max="1440" step="1" /></label>
       </div>
 
-      <h3>Spike alerts</h3>
-      <label class="row">Absolute jump (points/interval)
-        <input type="number" id="set-spike-abs" min="1" max="100" step="1" /></label>
-      <label class="row">Relative minimum (points)
-        <input type="number" id="set-spike-rel-min" min="1" max="100" step="1" /></label>
-      <label class="row">Rate vs 24h median (x)
-        <input type="number" id="set-spike-rel-mult" min="1" max="100" step="0.5" /></label>
-      <label class="row">Alert duration (min)
-        <input type="number" id="set-spike-minutes" min="1" max="1440" step="1" /></label>
-
-      <h3>API keys</h3>
-      <p class="hint">Keys are stored only in Windows Credential Manager; key actions confirm first and never log the key. Cards scale to fit the window (drag its edge to resize).</p>
-      <div id="api-keys"></div>
+      <div class="pane" role="tabpanel" id="pane-keys" aria-labelledby="tab-keys" hidden>
+        <div class="sec-head"><h3>API keys</h3><button class="info" aria-controls="info-keys" aria-expanded="false" aria-label="About key storage" title="Details">i</button></div>
+        <p class="info-text" id="info-keys" hidden>Keys are stored only in Windows Credential Manager, never in settings files or logs. Store, Test and Remove each ask to confirm first.</p>
+        <div id="api-keys"></div>
+      </div>
     </div>
   </section>
 

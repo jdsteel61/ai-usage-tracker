@@ -119,6 +119,28 @@ missing or older than 25 minutes. A fresh local capture means zero API calls.
 
 ## Understand reading freshness
 
+For Claude Code over SSH, API top-up can fetch the account's subscription usage
+without local capture. The matching profile on the tracker PC must remain signed
+in: signing in on the remote machine does not refresh this PC's saved login.
+An **API login rejected** status means that local profile needs a new sign-in;
+an **API rate limited** status means the tracker is waiting for its rate budget.
+
+Claude cards and Settings show each profile's saved account email, machine, and
+config folder. Saved identities come from Claude Code's `.claude.json` metadata
+and are labeled unverified. With API top-up enabled, **Verify account** checks
+`GET https://api.anthropic.com/api/oauth/profile` using that profile's saved login
+and the same rate budget as usage checks. Only the account ID, organization ID,
+and email are selected from the response; verification is kept in memory for
+this tracker session and cleared when the credentials file changes. These are
+Claude's internal OAuth endpoints; account verification can fail independently
+of usage access. Matching accounts or subscription organizations get a warning;
+a mismatch between saved metadata and the verified login gets a warning too.
+Account emails and config paths are omitted from the copied usage summary.
+
+When a quota window's reset has passed without a new reading, its card shows
+`?` and the copied summary says **current usage unknown**. The old percentage
+remains available as historical detail, and does not count toward the tray gauge.
+
 Each card has a small status dot and a text label. Hover the status to see the
 source, reading age, and any error or retry detail.
 
