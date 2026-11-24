@@ -6,6 +6,10 @@ profiles. It shows quota percentages, credit budgets, or key health according to
 what each provider exposes. Percentages across providers are not directly
 comparable; missing numbers are never guessed.
 
+It started from ideas in three open-source projects: agent-usage-widget,
+UsageDeck (I contributed a fix to it) and codex-usage-monitor. What it borrows
+is credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 Claude readings come from **local Claude Code status-line capture**, for every
 Claude account at once. An optional, per-account **API top-up** (off by default)
 can fill in an account whose capture has gone quiet; see
@@ -16,9 +20,8 @@ usage (see Troubleshooting). Nothing runs automatically.
 
 ## Windows setup
 
-1. Download the Windows x64 ZIP from a
-   [published release](https://github.com/jdsteel61/ai-usage-tracker/releases),
-   when available. The
+1. Download the Windows x64 ZIP from the
+   [latest release](https://github.com/jdsteel61/ai-usage-tracker/releases/latest). The
    [Windows build workflow](https://github.com/jdsteel61/ai-usage-tracker/actions/workflows/windows-build.yml)
    also provides downloadable build artifacts after a successful run; GitHub
    requires sign-in to download Actions artifacts. Build automation prepares
@@ -33,12 +36,12 @@ usage (see Troubleshooting). Nothing runs automatically.
 For Actions downloads, extract the `ai-usage-tracker-windows-x64` artifact first
 to get the portable ZIP and checksum, then extract the portable ZIP in step 2.
 
-Release assets use names such as `ai-usage-tracker-1.5.1-win32-x64.zip`, with a
+Release assets use names such as `ai-usage-tracker-1.6.1-win32-x64.zip`, with a
 matching `.zip.sha256` file. To check a downloaded ZIP in PowerShell, compare the
 hash below with that file:
 
 ```powershell
-Get-FileHash .\ai-usage-tracker-1.5.1-win32-x64.zip -Algorithm SHA256
+Get-FileHash .\ai-usage-tracker-1.6.1-win32-x64.zip -Algorithm SHA256
 ```
 
 A checksum detects a damaged or mismatched download; it is not code signing.
