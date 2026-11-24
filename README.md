@@ -1,5 +1,7 @@
 # AI Usage Tracker
 
+![AI Usage Tracker's compact panel showing usage cards for several AI coding plans](screenshots/mini-six-100.png)
+
 A compact Windows tray app for **Codex, Claude Code, Z.ai, Grok, Gemini,
 OpenRouter, and Muse**, with separate cards for additional Codex and Claude subscription
 profiles. It shows quota percentages, credit budgets, or key health according to
@@ -7,21 +9,28 @@ what each provider exposes. Percentages across providers are not directly
 comparable; missing numbers are never guessed.
 
 It started from ideas in three open-source projects: agent-usage-widget,
-UsageDeck (I contributed a fix to it) and codex-usage-monitor. What it borrows
-is credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+UsageDeck (I contributed a fix to it, merged as
+[PR #38](https://github.com/lamchun1110/UsageDeck/pull/38)) and
+codex-usage-monitor. What it borrows is credited in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Claude readings come from **local Claude Code status-line capture**, for every
 Claude account at once. An optional, per-account **API top-up** (off by default)
-can fill in an account whose capture has gone quiet; see
-[Claude API top-up](#claude-api-top-up). Monitoring makes no model inference
-requests, with one deliberate exception: for Muse, pressing **Refresh** runs
-a single tiny prompt so Muse's local host can report real subscription
-usage (see Troubleshooting). Nothing runs automatically.
+can fill in an account whose capture has gone quiet, and also runs when you
+press **Refresh**; see [Claude API top-up](#claude-api-top-up). Monitoring
+makes no model inference requests, with one deliberate exception: for Muse,
+pressing **Refresh** runs a single tiny prompt so Muse's local host can report
+real subscription usage (see Troubleshooting). That prompt never runs
+automatically.
 
 ## Windows setup
 
 1. Download the Windows x64 ZIP from the
-   [latest release](https://github.com/jdsteel61/ai-usage-tracker/releases/latest). The
+   [latest release](https://github.com/jdsteel61/ai-usage-tracker/releases/latest).
+   That is v1.6.1, from 5 October 2026. It doesn't have Muse, Claude account
+   verification, the tabbed Settings screen, or Refresh forcing a Claude API
+   check. To get those, [build from source](#build-and-run-from-source). A
+   source build still calls itself 1.6.1. The
    [Windows build workflow](https://github.com/jdsteel61/ai-usage-tracker/actions/workflows/windows-build.yml)
    also provides downloadable build artifacts after a successful run; GitHub
    requires sign-in to download Actions artifacts. Build automation prepares
@@ -83,8 +92,9 @@ capture file. Each Claude card shows its reading source and age, such as
 Local capture only updates while you use Claude Code with that account, so an
 idle account's reading ages. **API top-up** is an opt-in checkbox per Claude
 account (default off; enabling asks for confirmation). When on, the tracker asks
-Claude's usage endpoint only if the newest reading it holds for that account is
-missing or older than 25 minutes. A fresh local capture means zero API calls.
+Claude's usage endpoint only when the newest reading it holds for that account
+is missing or older than 25 minutes, when one of its quota windows has passed
+its reset time, or when you press **Refresh**.
 
 - It reads `<Claude config folder>/.credentials.json` **read-only** and sends
   the access token to `https://api.anthropic.com/api/oauth/usage`. It never
@@ -97,12 +107,15 @@ missing or older than 25 minutes. A fresh local capture means zero API calls.
   cleared and you must approve again. The profile folder can be changed only by
   removing and re-adding the profile, never through the settings channel.
 - That endpoint rate-limits very aggressively, so calls follow a strict budget:
-  at least 10 minutes between calls per account, at most one call started per
-  minute across all accounts, and on HTTP 429 a wait of the longest of: any
-  cooldown still running, the escalation step (1, 2, then 4 hours), and the
-  server's `Retry-After` when valid (up to 24 hours), plus a little jitter. A
-  short `Retry-After` never shortens an existing wait, and the escalation eases
-  only after several successes or a long quiet period, not after one success.
+  at least 10 minutes between calls per account and at most one call started
+  per minute across all accounts. **Refresh** and **Verify account** need only
+  1 minute since that account's last call and skip the cross-account limit.
+  After HTTP 429 the account waits the longest of: any cooldown still
+  running, the escalation step (1, 2, then 4 hours), and the server's
+  `Retry-After` when valid (up to 24 hours), plus a little jitter. Refresh
+  does not shorten that wait. A short `Retry-After` never shortens an existing
+  wait, and the escalation eases only after several successes or a long quiet
+  period, not after one success.
   A 401/403 marks the account **sign-in needed** and stops calls until you sign
   in again (its credentials file changes) or a new local capture arrives. When
   several accounts are waiting, the one with the oldest reading goes first and
